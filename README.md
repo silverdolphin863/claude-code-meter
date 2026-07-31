@@ -1,0 +1,101 @@
+# CC Meter
+
+A tray widget for Windows that shows how much of your **Claude Code** and **Codex**
+rate limits you have burned, and how fast you are burning them.
+
+Not a cost tracker. It answers the only question that matters mid-session: *am I
+going to hit the wall before this window resets?*
+
+![CC Meter compact strip](docs/strip.png)
+
+## What it shows
+
+For each limit window: percent used, a bar, the reset time, and a **pace** badge.
+
+Pace is the useful part. `1.0x` means you are burning quota exactly in step with
+the clock, so you will run out precisely at the reset. `0.3x` means you are
+coasting. `1.6x` means you will hit the wall early, and roughly how early.
+
+- **Claude Code** - 5-hour window, weekly all-models, and weekly per-model
+  (Opus, Fable, whichever your plan scopes). The per-model split is real, it
+  comes from the same source the `/usage` screen uses.
+- **Codex** - 5-hour and weekly. One shared pool; Codex exposes no per-model
+  split.
+
+Two modes: a compact strip that docks against the top edge of the screen (with
+optional auto-hide until you touch the edge), and a full panel with countdowns.
+
+## Install
+
+Download `CCMeter-Setup-x.y.z.exe` from
+[Releases](../../releases) and run it. It lives in the tray, not the taskbar.
+
+**The installer is unsigned**, so Windows SmartScreen will show
+"Windows protected your PC". Click **More info** -> **Run anyway**. If you would
+rather not trust a binary from a stranger on the internet, build it yourself, it
+takes one command (see below). That is the honest answer and it is why the
+source is here.
+
+## Where the numbers come from
+
+Everything is local. There is no service of mine involved, and nothing is sent
+anywhere except to Anthropic's own API, from your machine, with your own token.
+
+**Claude**: reads `~/.claude/usage-cache.json`. That file is written by the
+statusline script, not by Claude Code itself, so with no terminal open it goes
+stale for hours. CC Meter therefore refreshes it the same way the statusline
+does: it reads the OAuth token from `~/.claude/.credentials.json` and calls
+`https://api.anthropic.com/api/oauth/usage`, then writes the response back to
+the cache. It honours the same lock file, so the two writers never race.
+
+**Codex**: reads the newest session files under `~/.codex/sessions/` and takes
+the most recent `rate_limits` block. No API exists for this, so Codex numbers
+only move when Codex runs.
+
+### About that token
+
+CC Meter reads your Claude OAuth token off disk and sends it to
+`api.anthropic.com` and nowhere else. It is never logged, never stored anywhere
+new, and never transmitted to any host but Anthropic's. `server.mjs` is about
+300 lines; the entire network surface is one `fetch` call. Read it.
+
+The usage endpoint is undocumented and rate-limited (observed: HTTP 429 with a
+~57 minute `Retry-After`). CC Meter refreshes at most once every 10 minutes,
+honours `Retry-After` exactly, backs off exponentially on failure, and persists
+that backoff across restarts so relaunching cannot hammer a locked-out endpoint.
+Being undocumented, the endpoint may change or stop working without notice.
+
+## Local HTTP server
+
+The UI is served from `http://localhost:7373`, and `GET /usage.json` returns the
+raw data. Handy if you want to drive your own display (an ESP32 panel, a
+statusline, a second monitor). It sends `Access-Control-Allow-Origin: *`, which
+means any page in your browser can read your usage percentages while CC Meter is
+running. Nothing sensitive is exposed there (no token, no session content), but
+you should know it is open.
+
+## Build it yourself
+
+```bash
+npm install
+npm start        # dev
+npm run dist     # unsigned NSIS installer -> dist/
+```
+
+Requires Node 20+ and Windows. macOS and Linux are untested; the tray behaviour
+and the screen-edge dock are Windows-shaped.
+
+## Limitations
+
+- Windows only, for now.
+- Only works with an OAuth (subscription) Claude Code login. API-key users have
+  no plan limits to display.
+- Codex freshness is capped by Codex itself: the numbers only move when Codex
+  writes a session file.
+- No auto-update. Watch the releases page.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+Not affiliated with, endorsed by, or supported by Anthropic or OpenAI.

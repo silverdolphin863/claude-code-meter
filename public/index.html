@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Meter</title>
+<style>
+  :root {
+    --bg: #14131a;
+    --card: #1e1c27;
+    --line: #2f2c3b;
+    --ink: #f4f2f9;
+    --muted: #8b85a0;
+    --dim: #625c78;
+    --track: #262332;
+    --track-tex: #33304180;
+    --ok: #3ddc84;
+    --warn: #ffd23f;
+    --orange: #ff9f45;
+    --hot: #ff5f56;
+    --accent: #a78bfa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: transparent; }
+  body {
+    color: var(--ink);
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    overflow: hidden;
+  }
+
+  .ok     { color: var(--ok); }     .bar-ok     { background: var(--ok); }
+  .warn   { color: var(--warn); }   .bar-warn   { background: var(--warn); }
+  .orange { color: var(--orange); } .bar-orange { background: var(--orange); }
+  .hot    { color: var(--hot); }    .bar-hot    { background: var(--hot); }
+
+  /* Shared track texture so the unfilled remainder stays readable in both modes. */
+  .track {
+    background: var(--track);
+    background-image: repeating-linear-gradient(
+      135deg, var(--track-tex) 0 2px, transparent 2px 5px);
+    box-shadow: inset 0 0 0 1px #ffffff0a;
+    overflow: hidden;
+  }
+  .fill { height: 100%; transition: width 0.45s ease; box-shadow: inset 0 1px 0 #ffffff30; }
+
+  button.icon {
+    -webkit-app-region: no-drag;
+    background: transparent; border: 0; border-radius: 6px;
+    color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer;
+    display: none; align-items: center; justify-content: center; flex: none;
+  }
+  body.electron button.icon { display: flex; }
+  button.icon:hover { background: #ffffff14; color: var(--ink); }
+  button.icon.on { color: var(--accent); }
+
+  /* ---------- full mode ---------- */
+  .shell {
+    height: 100%; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 14px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  body.compact .shell { display: none; }
+
+  .shell header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 9px 10px 8px 12px; flex: none;
+    -webkit-app-region: drag;
+  }
+  .shell header h1 { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; flex: 1; }
+  .age { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  /* Drag regions swallow mouse events, so anything with a tooltip must opt out
+     or the tooltip never fires. That is why the freshness dot had none. */
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none;
+    -webkit-app-region: no-drag;
+  }
+  .age { -webkit-app-region: no-drag; }
+  .dot.stale { background: var(--warn); }
+  .dot.dead  { background: var(--hot); }
+  .shell header button.icon { width: 22px; height: 22px; }
+
+  main { flex: 1; overflow-y: auto; padding: 0 10px 10px; }
+  main::-webkit-scrollbar { width: 0; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 11px 11px; margin-bottom: 8px;
+  }
+  .card > h2 {
+    font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--dim); margin-bottom: 9px; display: flex; align-items: baseline; gap: 6px;
+  }
+  .card > h2 .plan { font-size: 9px; color: var(--accent); }
+
+  .row + .row { margin-top: 10px; }
+  .row .top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 4px; }
+  .row .label {
+    font-size: 12px; font-weight: 600; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row .pct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .row .pace {
+    font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+    padding: 1px 5px; border-radius: 5px; background: #ffffff0f;
+  }
+  .row .track { height: 13px; border-radius: 5px; }
+  .row .fill  { border-radius: 5px; }
+  .row .sub {
+    margin-top: 4px; font-size: 10.5px; color: var(--dim);
+    font-variant-numeric: tabular-nums; display: flex; justify-content: space-between; gap: 8px;
+  }
+
+  /* ---------- compact mode: a wedge against the top screen edge ---------- */
+  .strip { display: none; }
+  body.compact .strip {
+    display: flex; align-items: center; gap: 8px;
+    /* Fixed row height, not 100%: when the settings panel grows the window,
+       the gauges must stay pinned to the top instead of drifting to centre. */
+    height: 29px; padding: 0 6px 0 12px;
+    background: var(--bg);
+    border: 1px solid var(--line); border-top: 0;
+    border-radius: 0 0 12px 12px;
+    -webkit-app-region: drag;
+    overflow: hidden;
+    position: relative;
+  }
+  .strip .items {
+    display: flex; align-items: center; gap: 10px;
+    flex: 1; min-width: 0; overflow: hidden;
+  }
+  .gchip {
+    font-size: 9px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--dim); flex: none;
+  }
+  /* Each gauge takes an equal share of the strip and its bar absorbs whatever
+     space is left over, so widening the window widens the bars themselves.
+     min-width: fit-content stops a gauge shrinking below its own labels, so
+     text can never overlap a neighbour; the window min tracks this too. */
+  .sitem { display: flex; align-items: center; gap: 5px; flex: 1 1 auto; min-width: fit-content; }
+  .sitem .k { font-size: 10.5px; font-weight: 700; color: var(--muted); flex: none; }
+  .sitem .track { flex: 1 1 34px; min-width: 34px; height: 6px; border-radius: 3px; }
+  .sitem .fill { border-radius: 3px; }
+  .sitem .p { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+  .sitem .x {
+    font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+    padding: 0 4px; border-radius: 4px; background: #ffffff0f; flex: none;
+  }
+  .sitem .rt {
+    font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; flex: none;
+  }
+  .sep { width: 1px; height: 13px; background: var(--line); flex: none; }
+  .strip button.icon { width: 19px; height: 19px; }
+  .strip button#gearC { width: 21px; height: 21px; }
+  .strip .err { font-size: 11px; color: var(--hot); }
+  .err { font-size: 11px; color: var(--hot); }
+  .empty { font-size: 11px; color: var(--dim); }
+
+
+  /* Auto-hide reads as a real switch, so its on/off state is unambiguous. */
+  .swlabel {
+    display: none; font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--dim); flex: none;
+  }
+  .switch {
+    display: none; -webkit-app-region: no-drag;
+    width: 26px; height: 14px; flex: none; padding: 0;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--track); cursor: pointer; position: relative;
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  body.electron .switch, body.electron .swlabel { display: inline-flex; align-items: center; }
+  .switch .knob {
+    position: absolute; top: 1px; left: 1px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--muted);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .switch.on { background: #6d4fd6; border-color: #8b6ff0; }
+  .switch.on .knob { transform: translateX(12px); background: #fff; }
+  .switch.on + .swlabel, .swlabel.on { color: var(--accent); }
+
+  /* Grab zones for drag-resizing the strip. Frameless transparent windows are
+     unreliable to resize from the OS border, so the drag is handled in JS. */
+  .edge {
+    position: absolute; top: 0; bottom: 0; width: 7px;
+    -webkit-app-region: no-drag; cursor: ew-resize; z-index: 5;
+  }
+  .edge.l { left: 0; }
+  .edge.r { right: 0; }
+  .edge:hover { background: linear-gradient(var(--accent), var(--accent)); opacity: 0.25; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <header>
+    <h1>CC Meter</h1>
+    <span class="age" id="age"></span>
+    <span class="dot" id="dot"></span>
+    <button class="icon" id="gearF" title="Settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19.14 12.94a7.5 7.5 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6"/>
+      </svg>
+    </button>
+    <button class="icon" id="compact" title="Compact mode">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round"><path d="M2 5h12M2 9h12"/></svg>
+    </button>
+    <button class="icon on" id="pin" title="Always on top">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 1.5h4l-.7 3.2 2.4 2.1v1.4H4.3V6.8l2.4-2.1z"/><path d="M8 8.2V14"/>
+      </svg>
+    </button>
+    <button class="icon" id="close" title="Close">&#215;</button>
+  </header>
+  <main id="out"></main>
+</div>
+
+<div class="strip">
+  <div class="edge l" id="edgeL"></div>
+  <div class="items" id="items"></div>
+  <span class="age" id="age2"></span>
+  <span class="dot" id="dot2"></span>
+  <span class="swlabel" id="swlabel">auto</span>
+  <button class="switch" id="autohide"
+          title="Auto-hide: slide the strip off screen until the mouse touches the top edge"
+          role="switch" aria-checked="false"><span class="knob"></span></button>
+  <button class="icon" id="gearC" title="Settings">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19.14 12.94a7.5 7.5 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6"/>
+    </svg>
+  </button>
+  <button class="icon" id="expand" title="Full mode">
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round"><path d="M2 3.5h12M2 8h12M2 12.5h12"/></svg>
+  </button>
+  <button class="icon" id="close2" title="Close">&#215;</button>
+  <div class="edge r" id="edgeR"></div>
+</div>
+
+<script>
+const POLL_MS = 10000;
+let data = null;
+let lastOk = 0;
+let mode = 'full';
+
+// Meter visibility: 'auto' shows a meter only when its tool is detected;
+// an explicit choice from the settings panel overrides that.
+// AUTHORITY: under Electron the shell's state file is the single source of
+// truth (delivered via onState). localStorage is only for plain-browser use;
+// reading it under Electron let a stale value silently override the state
+// file, which is how the Codex meter once vanished without being asked to.
+let prefs = { claude: 'auto', codex: 'auto', showReset: true };
+if (!window.widget) {
+  try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem('meterPrefs') || '{}') }; } catch {}
+}
+
+function meterVisible(s) {
+  const p = prefs[s.id];
+  if (p === true || p === 'on') return true;
+  if (p === false || p === 'off') return false;
+  return s.installed !== false; // auto
+}
+
+function visibleSections() {
+  return data.sections.filter(meterVisible);
+}
+
+function savePrefs() {
+  try { localStorage.setItem('meterPrefs', JSON.stringify(prefs)); } catch {}
+  if (window.widget && window.widget.setPrefs) window.widget.setPrefs(prefs);
+}
+
+if (window.widget) document.body.classList.add('electron');
+
+function usageCls(p) { return p >= 90 ? 'hot' : p >= 70 ? 'orange' : p >= 50 ? 'warn' : 'ok'; }
+function paceCls(x)  { return x >= 1.5 ? 'hot' : x >= 1.1 ? 'orange' : x >= 0.9 ? 'warn' : 'ok'; }
+
+// pace = share of quota used / share of window elapsed
+function calcPace(percent, resetIso, windowHours) {
+  if (!resetIso || !windowHours || percent <= 0) return null;
+  const windowMs = windowHours * 3600 * 1000;
+  const remainMs = new Date(resetIso).getTime() - Date.now();
+  const elapsedPct = Math.max(1, Math.min(100, (windowMs - remainMs) * 100 / windowMs));
+  return percent / elapsedPct;
+}
+
+function countdown(iso) {
+  if (!iso) return '';
+  let s = Math.floor((new Date(iso) - Date.now()) / 1000);
+  if (s <= 0) return 'resetting';
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600);  s -= h * 3600;
+  const m = Math.floor(s / 60);
+  return 'Resets in ' + (d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm');
+}
+
+function resetClock(iso, windowHours) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (windowHours && windowHours <= 24) return hh + ':' + mm;
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return days[d.getDay()] + ' ' + String(d.getDate()).padStart(2, '0') + '.' +
+         String(d.getMonth() + 1).padStart(2, '0') + ', ' + hh + ':' + mm;
+}
+
+// Strip variant of resetClock: the day is only worth the pixels when the reset
+// is NOT today, so same-day windows show a bare wall-clock time.
+function resetChip(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  if (sameDay) return hh + ':' + mm;
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return days[d.getDay()] + ', ' + hh + ':' + mm;
+}
+
+// Long labels do not fit the strip, so shorten to the distinguishing part.
+function shortLabel(label) {
+  if (label === '5-hour') return '5h';
+  if (label === 'Weekly' || label === 'Weekly, all models') return '7d';
+  if (label.startsWith('Weekly, ')) return label.slice(8);
+  return label;
+}
+
+function barHtml(percent, cls, extra) {
+  const w = Math.max(0, Math.min(100, percent));
+  return '<div class="track"' + (extra || '') + '><div class="fill bar-' + cls +
+         '" style="width:' + w + '%"></div></div>';
+}
+
+function rowHtml(l) {
+  const uc = usageCls(l.percent);
+  const pace = calcPace(l.percent, l.resets_at, l.window_hours);
+  const paceHtml = pace === null ? ''
+    : '<span class="pace ' + paceCls(pace) + '">' + pace.toFixed(1) + 'x</span>';
+  return '<div class="row">'
+    + '<div class="top"><span class="label">' + l.label + '</span>' + paceHtml
+    +   '<span class="pct ' + uc + '">' + l.percent + '%</span></div>'
+    + barHtml(l.percent, uc)
+    + '<div class="sub"><span>' + countdown(l.resets_at) + '</span>'
+    +   '<span>' + resetClock(l.resets_at, l.window_hours) + '</span></div>'
+    + '</div>';
+}
+
+function itemHtml(l) {
+  const uc = usageCls(l.percent);
+  const pace = calcPace(l.percent, l.resets_at, l.window_hours);
+  const paceHtml = pace === null ? ''
+    : '<span class="x ' + paceCls(pace) + '">' + pace.toFixed(1) + 'x</span>';
+  const chip = resetChip(l.resets_at);
+  const resetHtml = (prefs.showReset === false || !chip) ? ''
+    : '<span class="rt">' + chip + '</span>';
+  return '<div class="sitem" title="' + l.label + ', ' + countdown(l.resets_at) + '">'
+    + '<span class="k">' + shortLabel(l.label) + '</span>'
+    + barHtml(l.percent, uc)
+    + '<span class="p ' + uc + '">' + l.percent + '%</span>'
+    + paceHtml
+    + resetHtml
+    + '</div>';
+}
+
+// Re-assigning innerHTML destroys and recreates every node, which cancels a
+// tooltip you are hovering. Only touch the DOM when the markup actually differs.
+let lastFullHtml = null;
+let lastStripHtml = null;
+
+function renderFull() {
+  const out = [];
+  for (const s of visibleSections()) {
+    let inner;
+    if (s.error) inner = '<div class="err">' + s.error + '</div>';
+    else if (!s.limits.length) inner = '<div class="empty">no data yet</div>';
+    else inner = s.limits.map(rowHtml).join('');
+    const plan = s.plan ? '<span class="plan">' + s.plan + '</span>' : '';
+    out.push('<div class="card"><h2>' + s.name + plan + '</h2>' + inner + '</div>');
+  }
+  const html = out.join('');
+  if (html !== lastFullHtml) {
+    lastFullHtml = html;
+    document.getElementById('out').innerHTML = html;
+  }
+}
+
+function renderCompact() {
+  const parts = [];
+  visibleSections().forEach((s, i) => {
+    if (i) parts.push('<span class="sep"></span>');
+    parts.push('<span class="gchip">' + (s.name === 'Claude Code' ? 'Claude' : s.name) + '</span>');
+    if (s.error) parts.push('<span class="err">error</span>');
+    else parts.push(s.limits.map(itemHtml).join(''));
+  });
+  const html = parts.join('');
+  if (html !== lastStripHtml) {
+    lastStripHtml = html;
+    document.getElementById('items').innerHTML = html;
+    reportCompactMin();
+  }
+}
+
+// Tell the shell how narrow the strip may legally get: the sum of every
+// gauge's fit-content width plus controls. Below this, labels would clip.
+let lastMin = 0;
+function reportCompactMin() {
+  if (!window.widget || mode !== 'compact') return;
+  const strip = document.querySelector('.strip');
+  const items = document.getElementById('items');
+  const style = getComputedStyle(strip);
+  const gap = parseFloat(style.gap) || 0;
+  const pad = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  let need = pad;
+  for (const c of strip.children) {
+    if (c === items) {
+      const ist = getComputedStyle(items);
+      const igap = parseFloat(ist.gap) || 0;
+      for (const it of items.children) {
+        // scrollWidth of each child at its minimum = fit-content width
+        need += Math.ceil(it.getBoundingClientRect().width > 0 && it.classList.contains('sitem')
+          ? minItemWidth(it) : it.getBoundingClientRect().width);
+      }
+      need += igap * Math.max(0, items.children.length - 1);
+    } else {
+      need += Math.ceil(c.getBoundingClientRect().width);
+    }
+  }
+  need += gap * Math.max(0, strip.children.length - 1) + 8;
+  need = Math.ceil(need);
+  if (Math.abs(need - lastMin) > 6) { lastMin = need; window.widget.compactMin(need); }
+}
+
+// A gauge's minimum = all fixed parts + the track's 34px floor.
+function minItemWidth(item) {
+  let w = 0;
+  const gap = parseFloat(getComputedStyle(item).gap) || 0;
+  let n = 0;
+  for (const c of item.children) {
+    n++;
+    w += c.classList.contains('track') ? 34 : Math.ceil(c.getBoundingClientRect().width);
+  }
+  return w + gap * Math.max(0, n - 1);
+}
+
+// Write only on actual change. Reassigning an identical title still resets a
+// visible native tooltip, so these guards are what stop the flicker.
+function setTitle(id, text) {
+  const el = document.getElementById(id);
+  if (el && el.title !== text) el.title = text;
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+function render() {
+  if (!data) return;
+  if (mode === 'compact') renderCompact(); else renderFull();
+
+  // Freshness must describe the DATA, not my polling. Claude Code rewrites
+  // usage-cache.json only when it refreshes, so a green dot over a 10 minute
+  // old file would be a lie. Report the worst source age, plus fetch age.
+  const fetchAge = Math.round((Date.now() - lastOk) / 1000);
+  let dataAge = fetchAge;
+  for (const s of visibleSections()) {
+    if (typeof s.stale_ms === 'number') {
+      dataAge = Math.max(dataAge, Math.round(s.stale_ms / 1000) + fetchAge);
+    }
+  }
+  // Thresholds track the 10 minute refresh TTL: under 15m is normal by design.
+  const cls = 'dot' + (dataAge > 2700 ? ' dead' : dataAge > 900 ? ' stale' : '');
+  document.getElementById('dot').className = cls;
+  document.getElementById('dot2').className = cls;
+  // Coarse buckets on purpose. A per-second value would rewrite the title
+  // attribute every tick, and Chromium tears down a visible native tooltip
+  // whenever its text changes, which made it flicker while hovered.
+  const fmtAge = (s) => s < 60 ? 'under 1m' : s < 3600 ? Math.round(s / 60) + 'm'
+                                                       : Math.round(s / 3600) + 'h';
+  // Always label it. A bare coloured circle explains nothing on its own.
+  const txt = 'data ' + (dataAge < 60 ? '<1m' : fmtAge(dataAge));
+  setText('age', txt);
+  setText('age2', txt);
+
+  const per = visibleSections()
+    .filter((s) => typeof s.stale_ms === 'number')
+    .map((s) => '  ' + s.name + ': ' + fmtAge(Math.round(s.stale_ms / 1000) + fetchAge) + ' old')
+    .join('\n');
+  const label = dataAge > 2700 ? 'STALE' : dataAge > 900 ? 'Getting stale' : 'Fresh';
+  // A refresh that is failing is the ONLY explanation for a large age, so it
+  // must be stated. Without it the tooltip blamed "a few minutes" of normal lag
+  // while the real cause was an hour-long API rate-limit lockout.
+  const errs = visibleSections()
+    .filter((s) => s.refresh_error)
+    .map((s) => '\nRefresh FAILING for ' + s.name + ': ' + s.refresh_error)
+    .join('');
+  const tip = 'Data freshness: ' + label + ' (' + fmtAge(dataAge) + ' old)\n' + per + errs +
+    '\n\nThese numbers come from files Claude Code and Codex write on their own\n' +
+    'schedule, so they can lag the /usage screen by a few minutes.\n' +
+    'Green under 15m, amber under 45m, red beyond.';
+  for (const id of ['dot', 'dot2', 'age', 'age2']) setTitle(id, tip);
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/usage.json', { cache: 'no-store' });
+    if (r.ok) { data = await r.json(); lastOk = Date.now(); }
+  } catch { /* keep the last good values on screen */ }
+  render();
+}
+
+function setMode(next) {
+  mode = next;
+  document.body.classList.toggle('compact', next === 'compact');
+  render();
+}
+
+// Drag either strip edge to resize. Reported in screen coordinates so the
+// window moving mid-drag cannot feed back into the delta.
+function initEdgeResize() {
+  for (const id of ['edgeL', 'edgeR']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const right = id === 'edgeR';
+      const startX = e.screenX;
+      const startW = window.innerWidth;
+      const move = (ev) => {
+        // The strip stays centred, so dragging one edge moves both: a 1px pull
+        // on either side widens the window by 2px.
+        const dx = (ev.screenX - startX) * (right ? 1 : -1);
+        window.widget.compactResize(Math.round(startW + dx * 2));
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  }
+}
+
+if (window.widget) {
+  let pinned = true;
+  const pin = document.getElementById('pin');
+  pin.onclick = () => { pinned = !pinned; pin.classList.toggle('on', pinned); window.widget.pin(pinned); };
+  document.getElementById('close').onclick = () => window.widget.close();
+  document.getElementById('close2').onclick = () => window.widget.close();
+  document.getElementById('compact').onclick = () => { setMode('compact'); window.widget.setMode('compact'); };
+  document.getElementById('expand').onclick = () => { setMode('full'); window.widget.setMode('full'); };
+
+  const ahBtn = document.getElementById('autohide');
+  const ahLabel = document.getElementById('swlabel');
+  let autohide = false;
+  const paintAutohide = () => {
+    ahBtn.classList.toggle('on', autohide);
+    ahLabel.classList.toggle('on', autohide);
+    ahBtn.setAttribute('aria-checked', String(autohide));
+    ahBtn.title = autohide
+      ? 'Auto-hide is ON. The strip slides off screen and returns when the mouse touches the top edge. Click to turn off.'
+      : 'Auto-hide is OFF. The strip stays visible. Click to turn on.';
+  };
+  ahBtn.onclick = () => { autohide = !autohide; paintAutohide(); window.widget.setAutohide(autohide); };
+
+  window.widget.onState((s) => {
+    autohide = Boolean(s.autohide);
+    paintAutohide();
+    prefs = { claude: 'auto', codex: 'auto', showReset: true, ...(s.prefs || {}) };
+    setMode(s.mode);
+  });
+  paintAutohide();
+
+  // Reveal-on-hover is driven by cursor polling in the shell, not by page
+  // events: while hidden almost none of this page is on screen to hover.
+
+  initEdgeResize();
+
+  // Shrink-wrap full mode around its content on first run only.
+  let sized = false;
+  const t = setInterval(() => {
+    if (sized) { clearInterval(t); return; }
+    if (mode !== 'full') return;
+    const out = document.getElementById('out');
+    const last = out.lastElementChild;
+    if (!last) return;
+    // `out` is flex:1 so its scrollHeight equals its current height; measure to
+    // the bottom of the final card instead, or the window can never shrink.
+    const contentH = last.getBoundingClientRect().bottom - out.getBoundingClientRect().top;
+    const pad = parseFloat(getComputedStyle(out).paddingBottom) || 0;
+    const h = document.querySelector('.shell header').offsetHeight + contentH + pad + 2;
+    if (h > 80) { sized = true; window.widget.autosize(Math.round(h)); }
+  }, 300);
+}
+
+// Settings live in their own dialog window (opened via the gear or the tray),
+// never inline: a popover inside a 30px strip window has no room to exist.
+for (const id of ['gearF', 'gearC']) {
+  const el = document.getElementById(id);
+  if (el) el.onclick = () => { if (window.widget?.openSettings) window.widget.openSettings(); };
+}
+
+poll();
+setInterval(poll, POLL_MS);
+setInterval(render, 1000); // keeps countdowns and pace live between polls
+</script>
+
+</body>
+</html>

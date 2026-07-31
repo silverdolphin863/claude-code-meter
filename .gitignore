@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.ccmeter-refresh.json
+
+# Internal working notes and signing config: never published.
+HANDOFF.md
+sign-hook.cjs

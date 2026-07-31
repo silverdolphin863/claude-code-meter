@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Tray icon: no background tile. A dark rounded square reads as a blank
+       blob on a dark taskbar, so this is three bold bars on transparency,
+       each with a dark outline so they also hold up on a light taskbar. -->
+  <g stroke="#0b0b0f" stroke-opacity="0.55" stroke-width="2.6" stroke-linecap="round">
+    <line x1="4.6" y1="7"  x2="27.4" y2="7"/>
+    <line x1="4.6" y1="16" x2="27.4" y2="16"/>
+    <line x1="4.6" y1="25" x2="27.4" y2="25"/>
+  </g>
+  <g stroke-width="4.4" stroke-linecap="round" opacity="0.30">
+    <line x1="4.6" y1="7"  x2="27.4" y2="7"  stroke="#ffffff"/>
+    <line x1="4.6" y1="16" x2="27.4" y2="16" stroke="#ffffff"/>
+    <line x1="4.6" y1="25" x2="27.4" y2="25" stroke="#ffffff"/>
+  </g>
+  <g stroke-width="4.4" stroke-linecap="round">
+    <line x1="4.6" y1="7"  x2="20.5" y2="7"  stroke="#3ddc84"/>
+    <line x1="4.6" y1="16" x2="15.0" y2="16" stroke="#ffd23f"/>
+    <line x1="4.6" y1="25" x2="24.0" y2="25" stroke="#ff5f56"/>
+  </g>
+</svg>

@@ -1,0 +1,50 @@
+{
+  "name": "cc-meter",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Tray gauge for Claude Code and Codex rate limits",
+  "author": "silverdolphin863",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "serve": "node server.mjs",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "39.2.7",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "io.github.silverdolphin863.ccmeter",
+    "productName": "CC Meter",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.mjs",
+      "preload.cjs",
+      "server.mjs",
+      "public/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "CCMeter-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CC Meter"
+    }
+  }
+}

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CC Meter Settings</title>
+<style>
+  :root {
+    --bg: #14131a; --card: #1e1c27; --line: #2f2c3b; --ink: #f4f2f9;
+    --muted: #8b85a0; --dim: #625c78; --accent: #a78bfa; --track: #262332;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* A background on <body> propagates to the window canvas and is painted over
+     the whole square, ignoring border-radius. Keep html and body fully
+     transparent and put the surface on an inner wrapper, or the corners of a
+     transparent frameless window stay square. */
+  html, body { height: 100%; background: transparent; }
+  body {
+    color: var(--ink); overflow: hidden;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif; font-size: 13px;
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  .sheet {
+    height: 100%; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 14px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; padding: 10px 12px 8px 14px;
+    -webkit-app-region: drag;
+  }
+  header h1 { font-size: 13px; font-weight: 700; flex: 1; }
+  header button {
+    -webkit-app-region: no-drag; width: 20px; height: 20px;
+    background: transparent; border: 0; border-radius: 6px; color: var(--dim);
+    font-size: 13px; cursor: pointer;
+  }
+  header button:hover { background: var(--card); color: var(--ink); }
+  main { padding: 2px 14px 14px; }
+  h2 {
+    font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--dim); margin: 10px 0 4px;
+  }
+  label {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 8px; margin: 0 -8px; border-radius: 8px;
+    font-size: 12.5px; cursor: pointer;
+  }
+  label:hover { background: var(--card); }
+  label input { accent-color: var(--accent); width: 14px; height: 14px; }
+  label .na { font-size: 10px; color: var(--dim); margin-left: auto; }
+  .hint { font-size: 10.5px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="sheet">
+<header>
+  <h1>CC Meter Settings</h1>
+  <button id="close" title="Close">&#215;</button>
+</header>
+<main>
+  <h2>Meters</h2>
+  <label><input type="checkbox" id="mClaude"> Claude Code <span class="na" id="naClaude"></span></label>
+  <label><input type="checkbox" id="mCodex"> Codex <span class="na" id="naCodex"></span></label>
+
+  <h2>Behavior</h2>
+  <label><input type="checkbox" id="ah"> Auto-hide the strip until hovered</label>
+  <label><input type="checkbox" id="rt"> Show reset time in the strip</label>
+
+  <p class="hint">Meters follow detection by default: a tool that is not
+  installed is hidden automatically. Ticking a box overrides that.</p>
+</main>
+</div>
+
+<script>
+let prefs = { claude: 'auto', codex: 'auto', showReset: true };
+let sections = [];
+
+function visible(id) {
+  const p = prefs[id];
+  if (p === true || p === 'on') return true;
+  if (p === false || p === 'off') return false;
+  const s = sections.find((x) => x.id === id);
+  return s ? s.installed !== false : true;
+}
+
+function paint() {
+  for (const [id, box, na] of [['claude', 'mClaude', 'naClaude'], ['codex', 'mCodex', 'naCodex']]) {
+    document.getElementById(box).checked = visible(id);
+    const s = sections.find((x) => x.id === id);
+    document.getElementById(na).textContent = s && s.installed === false ? 'not detected' : '';
+  }
+}
+
+window.widget.onState((s) => {
+  prefs = { claude: 'auto', codex: 'auto', showReset: true, ...(s.prefs || {}) };
+  document.getElementById('ah').checked = Boolean(s.autohide);
+  document.getElementById('rt').checked = prefs.showReset !== false;
+  paint();
+});
+
+fetch('/usage.json').then((r) => r.json()).then((j) => {
+  sections = j.sections || [];
+  paint();
+}).catch(() => {});
+
+for (const [id, box] of [['claude', 'mClaude'], ['codex', 'mCodex']]) {
+  document.getElementById(box).onchange = (e) => {
+    const s = sections.find((x) => x.id === id);
+    const auto = s ? s.installed !== false : true;
+    // Store 'auto' when the choice matches detection, so detection keeps ruling.
+    prefs[id] = e.target.checked === auto ? 'auto' : (e.target.checked ? 'on' : 'off');
+    window.widget.setPrefs(prefs);
+  };
+}
+document.getElementById('ah').onchange = (e) => window.widget.setAutohide(e.target.checked);
+document.getElementById('rt').onchange = (e) => {
+  prefs.showReset = e.target.checked;
+  window.widget.setPrefs(prefs);
+};
+document.getElementById('close').onclick = () => window.close();
+</script>
+</body>
+</html>
