@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const HOME = os.homedir();
+const HOME = process.env.CCMETER_HOME || os.homedir();
 const CLAUDE_CACHE = path.join(HOME, '.claude', 'usage-cache.json');
 const CLAUDE_LOCK = CLAUDE_CACHE + '.lock';
 const CLAUDE_CREDS = path.join(HOME, '.claude', '.credentials.json');
@@ -26,6 +26,7 @@ const BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
 const CODEX_SESSIONS = path.join(HOME, '.codex', 'sessions');
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const PORT = Number(process.env.PORT || 7373);
+const CORS_ORIGIN = process.env.CCMETER_CORS_ORIGIN || '';
 
 // Scanning ~50k session files is slow, so the newest-file lookup is cached.
 const SCAN_TTL_MS = 30_000;
@@ -102,10 +103,8 @@ function labelFor(limit) {
   return limit.kind;
 }
 
-// usage-cache.json is written by the statusline script, not by Claude Code, so
-// it only refreshes when a statusline happens to render. With no terminal open
-// it goes stale for hours. Refresh it here too, using the same OAuth endpoint
-// and the same lock file so the two writers never race each other.
+// Refresh the standard Claude Code cache directly. A status-line script may
+// also write this file, so use the same lock protocol to avoid races.
 let refreshing = false;
 let lastRefreshError = null;
 // The usage endpoint rate-limits HARD (observed: 429 with Retry-After 3433s).
@@ -147,7 +146,7 @@ async function refreshClaudeUsage() {
   }
   if (!token) { lastRefreshError = 'no oauth token'; return; }
 
-  // Same lock protocol the statusline uses: exclusive create, steal if stale.
+  // Exclusive create, with stale-lock recovery for interrupted refreshes.
   try {
     fs.writeFileSync(CLAUDE_LOCK, String(Date.now()), { flag: 'wx' });
   } catch {
@@ -323,11 +322,12 @@ const server = http.createServer((req, res) => {
     let body;
     try { body = JSON.stringify(payload()); }
     catch (e) { res.writeHead(500); return res.end(String(e)); }
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*', // the ESP32 board polls this cross-origin
-    });
+    };
+    if (CORS_ORIGIN) headers['Access-Control-Allow-Origin'] = CORS_ORIGIN;
+    res.writeHead(200, headers);
     return res.end(body);
   }
 

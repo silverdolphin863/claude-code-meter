@@ -38,15 +38,16 @@ source is here.
 
 ## Where the numbers come from
 
-Everything is local. There is no service of mine involved, and nothing is sent
-anywhere except to Anthropic's own API, from your machine, with your own token.
+Everything is local. There is no service of mine involved. The only outbound
+request is the Claude usage request to Anthropic, made from your machine with
+your own OAuth token. Codex data is read locally and never uploaded.
 
-**Claude**: reads `~/.claude/usage-cache.json`. That file is written by the
-statusline script, not by Claude Code itself, so with no terminal open it goes
-stale for hours. CC Meter therefore refreshes it the same way the statusline
-does: it reads the OAuth token from `~/.claude/.credentials.json` and calls
-`https://api.anthropic.com/api/oauth/usage`, then writes the response back to
-the cache. It honours the same lock file, so the two writers never race.
+**Claude**: reads the standard Claude Code OAuth token from
+`~/.claude/.credentials.json` and calls
+`https://api.anthropic.com/api/oauth/usage` directly when the local cache is
+older than ten minutes. It writes the response to
+`~/.claude/usage-cache.json` and honours the cache lock. No status-line script
+is required.
 
 **Codex**: reads the newest session files under `~/.codex/sessions/` and takes
 the most recent `rate_limits` block. No API exists for this, so Codex numbers
@@ -68,16 +69,16 @@ Being undocumented, the endpoint may change or stop working without notice.
 ## Local HTTP server
 
 The UI is served from `http://localhost:7373`, and `GET /usage.json` returns the
-raw data. Handy if you want to drive your own display (an ESP32 panel, a
-statusline, a second monitor). It sends `Access-Control-Allow-Origin: *`, which
-means any page in your browser can read your usage percentages while CC Meter is
-running. Nothing sensitive is exposed there (no token, no session content), but
-you should know it is open.
+local usage data. Browser cross-origin access is disabled by default. If you
+want to drive another display, set `CCMETER_CORS_ORIGIN` to that display's
+specific origin before starting the server. No token or session content is
+returned by this endpoint.
 
 ## Build it yourself
 
 ```bash
 npm install
+npm test          # isolated Claude and Codex fixture test
 npm start        # dev
 npm run dist     # unsigned NSIS installer -> dist/
 ```
