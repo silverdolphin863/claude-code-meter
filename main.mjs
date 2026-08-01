@@ -128,7 +128,6 @@ function createWindow() {
   });
 
   win.setAlwaysOnTop(true, 'floating');
-  win.loadURL(`http://localhost:${PORT}/`);
 
   if (f) {
     const area = screen.getDisplayMatching(win.getBounds()).workArea;
@@ -544,6 +543,10 @@ app.whenReady().then(async () => {
       app.exit(0);
     });
   }
+  // Load only after the capture listener is attached. Attaching it after
+  // loadURL introduced a race where a fast local page finished first and left
+  // automated visual checks waiting forever.
+  win.loadURL(`http://localhost:${PORT}/`);
 });
 
 app.on('before-quit', () => { quitting = true; });
