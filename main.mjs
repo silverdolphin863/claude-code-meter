@@ -80,6 +80,9 @@ function loadState() {
 }
 
 let state = loadState();
+// Capture runs must stay fully on-screen. This is in-memory only, so automated
+// screenshots never change the user's saved auto-hide preference.
+if (process.env.WIDGET_CAPTURE) state = { ...state, autohide: false };
 let tray = null;
 let mainWindow = null;
 let quitting = false;
