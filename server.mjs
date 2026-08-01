@@ -1,12 +1,14 @@
 // Usage widget: serves rate-limit + context gauges for Claude Code and Codex.
-// Data sources (all local, no network):
-//   Claude limits  -> ~/.claude/usage-cache.json
+// Data sources:
+//   Claude limits  -> Anthropic usage API with ~/.claude/usage-cache.json
 //   Claude context -> newest ~/.claude/projects/**/*.jsonl (last assistant usage)
-//   Codex both     -> newest ~/.codex/sessions/**/*.jsonl (last token_count event)
+//   Codex limits   -> installed Codex app-server account/rateLimits/read
+//   Codex fallback -> newest ~/.codex/sessions/**/*.jsonl (last token_count event)
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HOME = process.env.CCMETER_HOME || os.homedir();
@@ -25,13 +27,81 @@ const MANUAL_REFRESH_COOLDOWN_MS = 60_000;
 // locked out must not hand it a fresh licence to hammer the endpoint.
 const BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
 const CODEX_SESSIONS = path.join(HOME, '.codex', 'sessions');
-const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
+const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC = path.join(APP_ROOT, 'public');
+let APP_VERSION = 'unknown';
+try {
+  APP_VERSION = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || APP_VERSION;
+} catch { /* a missing package manifest must not prevent the meter from starting */ }
 const PORT = Number(process.env.PORT || 7373);
 const CORS_ORIGIN = process.env.CCMETER_CORS_ORIGIN || '';
 
 // Scanning ~50k session files is slow, so the newest-file lookup is cached.
 const SCAN_TTL_MS = 30_000;
 const scanCache = new Map();
+
+// Current Codex versions expose the account-wide snapshot through the local
+// app-server protocol. Cache it so UI polling does not launch a process or hit
+// the account endpoint on every request.
+const CODEX_LIVE_TTL_MS = 300_000;
+const CODEX_LIVE_RETRY_MS = 60_000;
+const CODEX_LIVE_MAX_STALE_MS = 900_000;
+const CODEX_LIVE_TIMEOUT_MS = 10_000;
+const CODEX_LIVE_ENABLED = process.env.CCMETER_CODEX_LIVE !== '0';
+const codexLiveCache = { snapshot: null, at: 0, error: null, errorAt: 0, pending: null };
+
+function findExecutable(name) {
+  // npm installs both a POSIX shim without an extension and a Windows .cmd
+  // launcher. The extensionless shim is not executable by CreateProcess.
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  for (const folder of String(process.env.PATH || '').split(path.delimiter)) {
+    const cleanFolder = folder.replace(/^"|"$/g, '');
+    if (!cleanFolder) continue;
+    for (const extension of extensions) {
+      const candidate = path.join(cleanFolder, name + extension);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function codexLaunch() {
+  if (!CODEX_LIVE_ENABLED) return null;
+  const override = process.env.CCMETER_CODEX_COMMAND || '';
+  let command = override || findExecutable('codex');
+  if (!command) return null;
+
+  let prefixArgs = [];
+  if (override && process.env.CCMETER_CODEX_COMMAND_ARGS) {
+    try {
+      const parsed = JSON.parse(process.env.CCMETER_CODEX_COMMAND_ARGS);
+      if (Array.isArray(parsed) && parsed.every((arg) => typeof arg === 'string')) prefixArgs = parsed;
+    } catch { /* invalid test override, launch without prefix args */ }
+  }
+
+  // npm's Windows launcher adds an avoidable cmd.exe and Node wrapper. Use the
+  // native binary when the standard global npm layout is available.
+  if (!override && process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const triple = process.arch === 'arm64'
+      ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+    const npmRoot = path.dirname(command);
+    const candidates = [
+      path.join(npmRoot, 'node_modules', '@openai', 'codex', 'node_modules',
+        '@openai', `codex-win32-${arch}`, 'vendor', triple, 'bin', 'codex.exe'),
+      path.join(npmRoot, 'node_modules', '@openai', 'codex', 'vendor',
+        triple, 'bin', 'codex.exe'),
+    ];
+    const native = candidates.find((candidate) => fs.existsSync(candidate));
+    if (native) command = native;
+  }
+
+  return {
+    command,
+    args: [...prefixArgs, 'app-server', '--stdio'],
+    shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
+  };
+}
 
 // Returns the `count` most recently modified matching files, newest first.
 function newestFiles(dir, ext, count) {
@@ -296,9 +366,180 @@ function claudeSection() {
   return out;
 }
 
-function codexSection() {
+function requestCodexLiveSnapshot() {
+  const launch = codexLaunch();
+  if (!launch) return Promise.reject(new Error('Codex CLI not found'));
+
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(launch.command, launch.args, {
+        shell: launch.shell,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    let settled = false;
+    let buffer = '';
+    const timer = setTimeout(() => finish(new Error('Codex app-server timed out')), CODEX_LIVE_TIMEOUT_MS);
+
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child.stdin.end(); } catch { /* process already closed */ }
+      const killTimer = setTimeout(() => {
+        try { if (!child.killed) child.kill(); } catch { /* already gone */ }
+      }, 500);
+      killTimer.unref?.();
+      if (error) reject(error);
+      else resolve(result);
+    }
+
+    function send(message) {
+      if (!settled) child.stdin.write(JSON.stringify(message) + '\n');
+    }
+
+    child.once('error', (error) => finish(error));
+    child.once('close', (code) => {
+      if (!settled) finish(new Error(`Codex app-server exited before replying (${code})`));
+    });
+    child.stdin.once('error', (error) => finish(error));
+    // Consume diagnostics so a noisy CLI cannot fill the stderr pipe and
+    // block the protocol response. Error details are intentionally not shown
+    // because they may contain local paths or account metadata.
+    child.stderr.resume();
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      if (buffer.length > 1_048_576) {
+        finish(new Error('Codex app-server response exceeded 1 MB'));
+        return;
+      }
+      for (;;) {
+        const newline = buffer.indexOf('\n');
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+
+        if (message.id === 1) {
+          if (message.error) return finish(new Error('Codex app-server initialization failed'));
+          send({ method: 'initialized' });
+          send({ id: 2, method: 'account/rateLimits/read', params: null });
+        } else if (message.id === 2) {
+          if (message.error) return finish(new Error('Codex rate-limit request failed'));
+          const result = message.result || {};
+          const aggregate = result.rateLimits || result.rateLimitsByLimitId?.codex;
+          if (!aggregate) return finish(new Error('Codex returned no account rate limits'));
+          finish(null, result);
+        }
+      }
+    });
+
+    send({
+      id: 1,
+      method: 'initialize',
+      params: { clientInfo: { name: 'cc-meter', version: APP_VERSION } },
+    });
+  });
+}
+
+function cachedCodexLive(now = Date.now()) {
+  if (!codexLiveCache.snapshot || now - codexLiveCache.at >= CODEX_LIVE_MAX_STALE_MS) return null;
+  return { snapshot: codexLiveCache.snapshot, at: codexLiveCache.at };
+}
+
+async function liveCodexSnapshot(force = false) {
+  if (!CODEX_LIVE_ENABLED) return null;
+  const now = Date.now();
+  const age = now - codexLiveCache.at;
+  const freshEnough = codexLiveCache.snapshot && age < CODEX_LIVE_TTL_MS;
+  if (freshEnough && (!force || age < MANUAL_REFRESH_COOLDOWN_MS)) {
+    return { snapshot: codexLiveCache.snapshot, at: codexLiveCache.at };
+  }
+  if (codexLiveCache.error && now - codexLiveCache.errorAt < CODEX_LIVE_RETRY_MS) {
+    return cachedCodexLive(now);
+  }
+  if (codexLiveCache.pending) return codexLiveCache.pending;
+
+  codexLiveCache.pending = requestCodexLiveSnapshot()
+    .then((snapshot) => {
+      codexLiveCache.snapshot = snapshot;
+      codexLiveCache.at = Date.now();
+      codexLiveCache.error = null;
+      codexLiveCache.errorAt = 0;
+      return { snapshot, at: codexLiveCache.at };
+    })
+    .catch((error) => {
+      codexLiveCache.error = error.message || 'Codex live query failed';
+      codexLiveCache.errorAt = Date.now();
+      return cachedCodexLive(codexLiveCache.errorAt);
+    })
+    .finally(() => { codexLiveCache.pending = null; });
+  return codexLiveCache.pending;
+}
+
+function resetSeconds(value) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) {
+    return number > 1_000_000_000_000 ? Math.floor(number / 1000) : Math.floor(number);
+  }
+  const parsed = Date.parse(value || '');
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
+}
+
+function codexWindowLabel(minutes) {
+  return minutes === 300 ? '5-hour'
+    : minutes === 10080 ? 'Weekly'
+      : Math.round(minutes / 60) + '-hour';
+}
+
+function normalizedCodexWindow(window) {
+  if (!window) return null;
+  const percent = Number(window.usedPercent ?? window.used_percent);
+  const minutes = Number(window.windowDurationMins ?? window.window_minutes);
+  const resets = resetSeconds(window.resetsAt ?? window.resets_at);
+  if (!Number.isFinite(percent) || !minutes || !resets || resets * 1000 <= Date.now()) return null;
+  return {
+    label: codexWindowLabel(minutes),
+    percent: Math.round(percent),
+    resets_at: new Date(resets * 1000).toISOString(),
+    window_hours: minutes / 60,
+    severity: 'normal',
+    active: false,
+  };
+}
+
+function codexSectionFromLive(live) {
+  const result = live.snapshot;
+  const limits = result.rateLimits || result.rateLimitsByLimitId?.codex;
+  const out = {
+    id: 'codex', name: 'Codex', installed: true, limits: [],
+    stale_ms: Math.max(0, Date.now() - live.at), error: null, source: 'live',
+  };
+  for (const window of [limits.primary, limits.secondary]) {
+    const normalized = normalizedCodexWindow(window);
+    if (normalized) out.limits.push(normalized);
+  }
+  if (!out.limits.length) out.error = 'no active Codex rate-limit window';
+  out.plan = limits.planType ?? limits.plan_type ?? null;
+  out.limit_name = limits.limitName ?? limits.limit_name ?? null;
+  return out;
+}
+
+function codexSectionFromLogs() {
   const installed = fs.existsSync(CODEX_SESSIONS);
-  const out = { id: 'codex', name: 'Codex', installed, limits: [], stale_ms: null, error: null };
+  const out = {
+    id: 'codex', name: 'Codex', installed, limits: [],
+    stale_ms: null, error: null, source: 'session-log',
+  };
   if (!installed) { out.error = 'Codex not detected'; return out; }
   const files = newestFiles(CODEX_SESSIONS, '.jsonl', 8);
   if (!files.length) {
@@ -339,8 +580,16 @@ function codexSection() {
     for (const key of ['primary', 'secondary']) {
       const w = c.rl[key];
       if (!w || typeof w.used_percent !== 'number' || !w.window_minutes) continue;
-      flat.push({ mins: w.window_minutes, resets_at: w.resets_at || 0, pct: w.used_percent, at: c.at });
+      const resets = resetSeconds(w.resets_at);
+      // A historical percentage is not a current limit. This is the exact
+      // failure that made a 98-hour-old Kongou snapshot look active.
+      if (!resets || resets * 1000 <= Date.now()) continue;
+      flat.push({ mins: w.window_minutes, resets_at: resets, pct: w.used_percent, at: c.at });
     }
+  }
+  if (!flat.length) {
+    out.error = 'no current rate_limits in recent sessions';
+    return out;
   }
 
   const windows = new Map(); // window_minutes -> winning group
@@ -361,7 +610,7 @@ function codexSection() {
 
   for (const [mins, w] of [...windows].sort((a, b) => a[0] - b[0])) {
     out.limits.push({
-      label: mins === 300 ? '5-hour' : mins === 10080 ? 'Weekly' : Math.round(mins / 60) + '-hour',
+      label: codexWindowLabel(mins),
       percent: Math.round(w.used_percent),
       resets_at: w.resets_at ? new Date(w.resets_at * 1000).toISOString() : null,
       window_hours: mins / 60,
@@ -376,10 +625,20 @@ function codexSection() {
   return out;
 }
 
-function payload() {
+async function codexSection(forceLive = false) {
+  const live = await liveCodexSnapshot(forceLive);
+  if (live) return codexSectionFromLive(live);
+
+  const fallback = codexSectionFromLogs();
+  if (!fallback.installed && codexLaunch()) fallback.installed = true;
+  if (!fallback.limits.length && codexLiveCache.error) fallback.error = 'live Codex usage unavailable';
+  return fallback;
+}
+
+async function payload(forceCodex = false) {
   return {
     generated_at: new Date().toISOString(),
-    sections: [claudeSection(), codexSection()],
+    sections: [claudeSection(), await codexSection(forceCodex)],
   };
 }
 
@@ -395,7 +654,7 @@ const server = http.createServer(async (req, res) => {
     // for the one allowed API attempt, so the button reflects its result.
     else refreshClaudeUsage();
     let body;
-    try { body = JSON.stringify(payload()); }
+    try { body = JSON.stringify(await payload(manual)); }
     catch (e) { res.writeHead(500); return res.end(String(e)); }
     const headers = {
       'Content-Type': 'application/json',

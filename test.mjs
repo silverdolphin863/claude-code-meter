@@ -18,13 +18,35 @@ await fs.writeFile(credentials, JSON.stringify({
 await fs.writeFile(path.join(claude, 'usage-cache.json'), JSON.stringify({
   limits: [{ kind: 'session', percent: 12, resets_at: new Date(now + 3600000).toISOString(), severity: 'normal', is_active: true }],
 }));
+const staleAt = now - 98 * 3600000;
 await fs.writeFile(path.join(codex, 'session.jsonl'), JSON.stringify({
-  timestamp: new Date().toISOString(),
+  timestamp: new Date(staleAt).toISOString(),
   payload: { rate_limits: {
-    primary: { used_percent: 23, window_minutes: 300, resets_at: Math.floor((now + 3600000) / 1000) },
-    secondary: { used_percent: 41, window_minutes: 10080, resets_at: Math.floor((now + 86400000) / 1000) },
+    primary: { used_percent: 35, window_minutes: 300, resets_at: Math.floor((staleAt + 5 * 3600000) / 1000) },
+    secondary: { used_percent: 97, window_minutes: 10080, resets_at: Math.floor((now - 24 * 3600000) / 1000) },
   } },
 }) + '\n');
+const liveCodexReset = Math.floor((now + 7 * 86400000) / 1000);
+const fakeCodex = path.join(root, 'fake-codex.mjs');
+await fs.writeFile(fakeCodex, `
+import readline from 'node:readline';
+const input = readline.createInterface({ input: process.stdin });
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) {
+    console.log(JSON.stringify({ id: 1, result: {} }));
+  } else if (message.id === 2 && message.method === 'account/rateLimits/read') {
+    console.log(JSON.stringify({ id: 2, result: {
+      rateLimits: {
+        limitId: 'codex', limitName: null, planType: 'pro',
+        primary: { usedPercent: 6, windowDurationMins: 10080, resetsAt: ${liveCodexReset} },
+        secondary: null,
+      },
+      rateLimitsByLimitId: {},
+    } }));
+  }
+});
+`);
 const port = 17373 + Math.floor(Math.random() * 1000);
 const mockPort = 19373 + Math.floor(Math.random() * 1000);
 let mockAuthorized = false;
@@ -54,10 +76,13 @@ const child = spawn(process.execPath, ['server.mjs'], {
     ...process.env,
     CCMETER_HOME: root,
     CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
+    CCMETER_CODEX_COMMAND: process.execPath,
+    CCMETER_CODEX_COMMAND_ARGS: JSON.stringify([fakeCodex]),
     PORT: String(port),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
+let fallbackChild = null;
 let output = '';
 child.stdout.on('data', (chunk) => { output += chunk; });
 child.stderr.on('data', (chunk) => { output += chunk; });
@@ -77,7 +102,10 @@ try {
   assert.equal(claudeSection.installed, true);
   assert.equal(claudeSection.limits[0].percent, 12);
   assert.equal(codexSection.installed, true);
-  assert.deepEqual(codexSection.limits.map((limit) => limit.percent), [23, 41]);
+  assert.equal(codexSection.source, 'live');
+  assert.deepEqual(codexSection.limits.map((limit) => limit.percent), [6]);
+  assert.deepEqual(codexSection.limits.map((limit) => limit.window_hours), [168]);
+  assert.equal(codexSection.limits[0].resets_at, new Date(liveCodexReset * 1000).toISOString());
   const manual = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
   assert.equal(manual.status, 200);
   const expired = (await manual.json()).sections.find((section) => section.id === 'claude');
@@ -132,9 +160,35 @@ try {
   assert.equal(mockRequests, 3);
   await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
   assert.equal(mockRequests, 3, 'successful manual refreshes must keep the click cooldown');
+
+  const fallbackPort = port + 2000;
+  fallbackChild = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: root,
+      CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
+      CCMETER_CODEX_LIVE: '0',
+      PORT: String(fallbackPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let fallbackResponse;
+  const fallbackDeadline = Date.now() + 5000;
+  while (!fallbackResponse && Date.now() < fallbackDeadline) {
+    try { fallbackResponse = await fetch(`http://127.0.0.1:${fallbackPort}/usage.json`); }
+    catch { await new Promise((resolve) => setTimeout(resolve, 100)); }
+  }
+  assert(fallbackResponse, 'fallback server did not start');
+  const fallbackCodex = (await fallbackResponse.json()).sections
+    .find((section) => section.id === 'codex');
+  assert.equal(fallbackCodex.source, 'session-log');
+  assert.deepEqual(fallbackCodex.limits, []);
+  assert.equal(fallbackCodex.error, 'no current rate_limits in recent sessions');
   console.log('clean-install fixture: PASS');
 } finally {
   child.kill();
+  fallbackChild?.kill();
   await new Promise((resolve) => mockUsageApi.close(resolve));
   await fs.rm(root, { recursive: true, force: true });
 }

@@ -38,9 +38,11 @@ source is here.
 
 ## Where the numbers come from
 
-Everything is local. There is no service of mine involved. The only outbound
-request is the Claude usage request to Anthropic, made from your machine with
-your own OAuth token. Codex data is read locally and never uploaded.
+CC Meter has no hosted service. It makes the Claude usage request to Anthropic
+from your machine with your own OAuth token.
+For Codex, it asks the installed Codex CLI for the current account snapshot;
+Codex handles its own authenticated OpenAI request. CC Meter never reads the
+Codex authentication token.
 
 **Claude**: reads the standard Claude Code OAuth token from
 `~/.claude/.credentials.json` and calls
@@ -49,9 +51,12 @@ older than ten minutes. It writes the response to
 `~/.claude/usage-cache.json` and honours the cache lock. No status-line script
 is required.
 
-**Codex**: reads the newest session files under `~/.codex/sessions/` and takes
-the most recent `rate_limits` block. No API exists for this, so Codex numbers
-only move when Codex runs.
+**Codex**: launches the local Codex app-server and calls
+`account/rateLimits/read`, cached for five minutes. This returns the current
+account-wide windows even when this machine's session files are old. If an
+older Codex version does not expose that method, CC Meter falls back to recent
+files under `~/.codex/sessions/` and discards every window whose reset time has
+already passed.
 
 ### About that token
 
@@ -91,8 +96,9 @@ and the screen-edge dock are Windows-shaped.
 - Windows only, for now.
 - Only works with an OAuth (subscription) Claude Code login. API-key users have
   no plan limits to display.
-- Codex freshness is capped by Codex itself: the numbers only move when Codex
-  writes a session file.
+- Live Codex readings require a Codex CLI version that exposes
+  `account/rateLimits/read`. Older versions use the filtered session-log
+  fallback and update only when Codex writes a session file.
 - No auto-update. Watch the releases page.
 
 ## License
