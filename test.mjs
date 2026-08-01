@@ -46,6 +46,9 @@ try {
   assert.equal(claudeSection.limits[0].percent, 12);
   assert.equal(codexSection.installed, true);
   assert.deepEqual(codexSection.limits.map((limit) => limit.percent), [23, 41]);
+  const manual = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
+  assert.equal(manual.status, 200);
+  assert.equal((await manual.json()).sections.find((section) => section.id === 'claude').limits[0].percent, 12);
   console.log('clean-install fixture: PASS');
 } finally {
   child.kill();

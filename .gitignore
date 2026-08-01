@@ -6,3 +6,4 @@ dist/
 # Internal working notes and signing config: never published.
 HANDOFF.md
 sign-hook.cjs
+.Codex/

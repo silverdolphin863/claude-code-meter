@@ -20,6 +20,7 @@ const USAGE_API = 'https://api.anthropic.com/api/oauth/usage';
 // is 6 calls/hour, far below any plausible ceiling, and costs nothing: these
 // windows are 5 hours and 7 days long.
 const REFRESH_TTL_MS = 600_000;
+const MANUAL_REFRESH_COOLDOWN_MS = 60_000;
 // Backoff state outlives the process on purpose: restarting the widget while
 // locked out must not hand it a fresh licence to hammer the endpoint.
 const BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
@@ -112,6 +113,7 @@ let lastRefreshError = null;
 // cache went 18h stale. Never call again before this timestamp.
 let nextAllowedAt = 0;
 let failures = 0;
+let lastRefreshAttemptAt = 0;
 try {
   const saved = JSON.parse(fs.readFileSync(BACKOFF_FILE, 'utf8'));
   if (Number(saved.nextAllowedAt) > Date.now()) {
@@ -129,13 +131,15 @@ function saveBackoff() {
   } catch { /* best effort */ }
 }
 
-async function refreshClaudeUsage() {
+async function refreshClaudeUsage(force = false) {
   if (refreshing) return;
   if (Date.now() < nextAllowedAt) return;
+  if (force && Date.now() - lastRefreshAttemptAt < MANUAL_REFRESH_COOLDOWN_MS) return;
 
   let age = Infinity;
   try { age = Date.now() - fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { /* no cache yet */ }
-  if (age < REFRESH_TTL_MS) return;
+  if (!force && age < REFRESH_TTL_MS) return;
+  lastRefreshAttemptAt = Date.now();
 
   let token;
   try {
@@ -219,7 +223,7 @@ function claudeSection() {
   } catch (e) {
     out.error = 'usage-cache.json unreadable: ' + e.code;
   }
-  if (lastRefreshError) out.refresh_error = lastRefreshError;
+  if (lastRefreshError && out.stale_ms >= REFRESH_TTL_MS) out.refresh_error = lastRefreshError;
   return out;
 }
 
@@ -312,13 +316,15 @@ function payload() {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript' };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0];
 
   if (url === '/usage.json') {
-    // Fire and forget: this request answers from the cache, and the refreshed
-    // values land in the next poll a few seconds later.
-    refreshClaudeUsage();
+    const manual = new URL(req.url, 'http://127.0.0.1').searchParams.get('refresh') === '1';
+    if (manual) await refreshClaudeUsage(true);
+    // Normal polls answer from the cache immediately. A manual refresh waits
+    // for the one allowed API attempt, so the button reflects its result.
+    else refreshClaudeUsage();
     let body;
     try { body = JSON.stringify(payload()); }
     catch (e) { res.writeHead(500); return res.end(String(e)); }

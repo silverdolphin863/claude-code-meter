@@ -55,6 +55,10 @@
   body.electron button.icon { display: flex; }
   button.icon:hover { background: #ffffff14; color: var(--ink); }
   button.icon.on { color: var(--accent); }
+  button.icon.refresh { display: flex; width: 22px; height: 22px; }
+  button.icon.refresh.busy svg { animation: spin 0.8s linear infinite; }
+  button.icon.refresh:disabled { opacity: 0.55; cursor: wait; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---------- full mode ---------- */
   .shell {
@@ -199,6 +203,12 @@
     <h1>CC Meter</h1>
     <span class="age" id="age"></span>
     <span class="dot" id="dot"></span>
+    <button class="icon refresh" id="refreshF" title="Refresh data" aria-label="Refresh data">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4"/>
+      </svg>
+    </button>
     <button class="icon" id="gearF" title="Settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19.14 12.94a7.5 7.5 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6"/>
@@ -224,6 +234,12 @@
   <div class="items" id="items"></div>
   <span class="age" id="age2"></span>
   <span class="dot" id="dot2"></span>
+  <button class="icon refresh" id="refreshC" title="Refresh data" aria-label="Refresh data">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4"/>
+    </svg>
+  </button>
   <span class="swlabel" id="swlabel">auto</span>
   <button class="switch" id="autohide"
           title="Auto-hide: slide the strip off screen until the mouse touches the top edge"
@@ -485,34 +501,38 @@ function render() {
   const fmtAge = (s) => s < 60 ? 'under 1m' : s < 3600 ? Math.round(s / 60) + 'm'
                                                        : Math.round(s / 3600) + 'h';
   // Always label it. A bare coloured circle explains nothing on its own.
-  const txt = 'data ' + (dataAge < 60 ? '<1m' : fmtAge(dataAge));
+  const txt = dataAge < 60 ? '<1m' : fmtAge(dataAge);
   setText('age', txt);
   setText('age2', txt);
 
-  const per = visibleSections()
-    .filter((s) => typeof s.stale_ms === 'number')
-    .map((s) => '  ' + s.name + ': ' + fmtAge(Math.round(s.stale_ms / 1000) + fetchAge) + ' old')
-    .join('\n');
-  const label = dataAge > 2700 ? 'STALE' : dataAge > 900 ? 'Getting stale' : 'Fresh';
-  // A refresh that is failing is the ONLY explanation for a large age, so it
-  // must be stated. Without it the tooltip blamed "a few minutes" of normal lag
-  // while the real cause was an hour-long API rate-limit lockout.
   const errs = visibleSections()
     .filter((s) => s.refresh_error)
-    .map((s) => '\nRefresh FAILING for ' + s.name + ': ' + s.refresh_error)
-    .join('');
-  const tip = 'Data freshness: ' + label + ' (' + fmtAge(dataAge) + ' old)\n' + per + errs +
-    '\n\nThese numbers come from files Claude Code and Codex write on their own\n' +
-    'schedule, so they can lag the /usage screen by a few minutes.\n' +
-    'Green under 15m, amber under 45m, red beyond.';
+    .map((s) => s.refresh_error.includes('401') ? 'Claude login expired' : 'Refresh failed')
+    .join(', ');
+  const tip = 'Updated ' + (dataAge < 60 ? 'just now' : fmtAge(dataAge) + ' ago')
+    + (errs ? '. ' + errs : '.');
   for (const id of ['dot', 'dot2', 'age', 'age2']) setTitle(id, tip);
 }
 
-async function poll() {
+let uiRefreshing = false;
+function paintRefresh(busy) {
+  uiRefreshing = busy;
+  for (const id of ['refreshF', 'refreshC']) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.disabled = busy;
+    button.classList.toggle('busy', busy);
+  }
+}
+
+async function poll(manual = false) {
+  if (manual && uiRefreshing) return;
+  if (manual) paintRefresh(true);
   try {
-    const r = await fetch('/usage.json', { cache: 'no-store' });
+    const r = await fetch('/usage.json' + (manual ? '?refresh=1' : ''), { cache: 'no-store' });
     if (r.ok) { data = await r.json(); lastOk = Date.now(); }
   } catch { /* keep the last good values on screen */ }
+  if (manual) paintRefresh(false);
   render();
 }
 
@@ -606,6 +626,10 @@ if (window.widget) {
 for (const id of ['gearF', 'gearC']) {
   const el = document.getElementById(id);
   if (el) el.onclick = () => { if (window.widget?.openSettings) window.widget.openSettings(); };
+}
+for (const id of ['refreshF', 'refreshC']) {
+  const el = document.getElementById(id);
+  if (el) el.onclick = () => poll(true);
 }
 
 poll();
