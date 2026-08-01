@@ -13,7 +13,7 @@ const HOME = process.env.CCMETER_HOME || os.homedir();
 const CLAUDE_CACHE = path.join(HOME, '.claude', 'usage-cache.json');
 const CLAUDE_LOCK = CLAUDE_CACHE + '.lock';
 const CLAUDE_CREDS = path.join(HOME, '.claude', '.credentials.json');
-const USAGE_API = 'https://api.anthropic.com/api/oauth/usage';
+const USAGE_API = process.env.CCMETER_USAGE_API || 'https://api.anthropic.com/api/oauth/usage';
 // The usage endpoint's limit is UNDOCUMENTED. The only measurement we have is a
 // 429 carrying Retry-After 3433s, i.e. an hourly bucket, ceiling unknown. 90s
 // here meant ~960 calls/day and locked the account out for 18 hours. 10 minutes
@@ -114,12 +114,47 @@ let lastRefreshError = null;
 let nextAllowedAt = 0;
 let failures = 0;
 let lastRefreshAttemptAt = 0;
+let authRequired = false;
+let blockedCredentialsMtimeMs = 0;
+let blockedCacheMtimeMs = 0;
+
+function credentialsMtime() {
+  try { return fs.statSync(CLAUDE_CREDS).mtimeMs; } catch { return 0; }
+}
+
+function cacheMtime() {
+  try { return fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { return 0; }
+}
+
+function hasNewReadableCache() {
+  if (cacheMtime() <= blockedCacheMtimeMs) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CLAUDE_CACHE, 'utf8'));
+    return Boolean(parsed && typeof parsed === 'object');
+  } catch { return false; }
+}
+
 try {
   const saved = JSON.parse(fs.readFileSync(BACKOFF_FILE, 'utf8'));
-  if (Number(saved.nextAllowedAt) > Date.now()) {
+  const savedError = String(saved.error || '');
+  const backoffMtimeMs = fs.statSync(BACKOFF_FILE).mtimeMs;
+  // Migrate the old behavior that treated 401 like a transient outage. Auth
+  // failures wait for credentials to change instead of sleeping for an hour.
+  if (saved.authRequired || savedError === 'auth_required' || savedError.includes('api 401')) {
+    const savedCredentialsMtimeMs = Number(saved.credentialsMtimeMs) || 0;
+    const savedCacheMtimeMs = Number(saved.cacheMtimeMs) || 0;
+    const recoveredAfterLegacyFailure = !savedCredentialsMtimeMs && !savedCacheMtimeMs
+      && Math.max(credentialsMtime(), cacheMtime()) > backoffMtimeMs;
+    if (!recoveredAfterLegacyFailure) {
+      authRequired = true;
+      blockedCredentialsMtimeMs = savedCredentialsMtimeMs || credentialsMtime();
+      blockedCacheMtimeMs = savedCacheMtimeMs || cacheMtime();
+      lastRefreshError = 'auth_required';
+    }
+  } else if (Number(saved.nextAllowedAt) > Date.now()) {
     nextAllowedAt = Number(saved.nextAllowedAt);
     failures = Number(saved.failures) || 1;
-    lastRefreshError = String(saved.error || 'rate limited');
+    lastRefreshError = savedError || 'rate limited';
   }
 } catch { /* no prior lockout */ }
 
@@ -127,12 +162,41 @@ function saveBackoff() {
   try {
     fs.writeFileSync(BACKOFF_FILE, JSON.stringify({
       nextAllowedAt, failures, error: lastRefreshError,
+      authRequired, credentialsMtimeMs: blockedCredentialsMtimeMs,
+      cacheMtimeMs: blockedCacheMtimeMs,
     }));
   } catch { /* best effort */ }
 }
 
+function markAuthRequired() {
+  authRequired = true;
+  blockedCredentialsMtimeMs = credentialsMtime();
+  blockedCacheMtimeMs = cacheMtime();
+  lastRefreshError = 'auth_required';
+  nextAllowedAt = 0;
+  failures = 0;
+  saveBackoff();
+}
+
+function clearRefreshFailure() {
+  authRequired = false;
+  blockedCredentialsMtimeMs = 0;
+  blockedCacheMtimeMs = 0;
+  lastRefreshError = null;
+  nextAllowedAt = 0;
+  failures = 0;
+  saveBackoff();
+}
+
 async function refreshClaudeUsage(force = false) {
   if (refreshing) return;
+  if (authRequired) {
+    const credentialsChanged = credentialsMtime() > blockedCredentialsMtimeMs;
+    const cacheChanged = hasNewReadableCache();
+    if (!credentialsChanged && !cacheChanged) return;
+    clearRefreshFailure();
+    lastRefreshAttemptAt = 0;
+  }
   if (Date.now() < nextAllowedAt) return;
   if (force && Date.now() - lastRefreshAttemptAt < MANUAL_REFRESH_COOLDOWN_MS) return;
 
@@ -144,11 +208,8 @@ async function refreshClaudeUsage(force = false) {
   let token;
   try {
     token = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth?.accessToken;
-  } catch (e) {
-    lastRefreshError = 'credentials unreadable';
-    return;
-  }
-  if (!token) { lastRefreshError = 'no oauth token'; return; }
+  } catch { markAuthRequired(); return; }
+  if (!token) { markAuthRequired(); return; }
 
   // Exclusive create, with stale-lock recovery for interrupted refreshes.
   try {
@@ -168,8 +229,13 @@ async function refreshClaudeUsage(force = false) {
       signal: AbortSignal.timeout(8000),
     });
     const text = await res.text();
-    const parsed = JSON.parse(text);
-    if (!res.ok || parsed.error) {
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { /* handled below */ }
+    if (res.status === 401 || res.status === 403) {
+      markAuthRequired();
+      return;
+    }
+    if (!res.ok || parsed?.error) {
       lastRefreshError = 'api ' + res.status;
       // Obey Retry-After when the server states one, else back off
       // exponentially from 5 minutes up to an hour.
@@ -181,12 +247,11 @@ async function refreshClaudeUsage(force = false) {
       nextAllowedAt = Date.now() + backoff;
       lastRefreshError += ' (retrying in ' + Math.round(backoff / 60_000) + 'm)';
       saveBackoff();
-    } else {
+    } else if (parsed) {
       fs.writeFileSync(CLAUDE_CACHE, text);
-      lastRefreshError = null;
-      failures = 0;
-      nextAllowedAt = 0;
-      saveBackoff();
+      clearRefreshFailure();
+    } else {
+      throw new Error('invalid usage response');
     }
   } catch (e) {
     lastRefreshError = String(e.name || e.message || e);
@@ -202,7 +267,10 @@ async function refreshClaudeUsage(force = false) {
 function claudeSection() {
   // Installed = an OAuth login exists (the API needs it) or a usage cache does.
   const installed = fs.existsSync(CLAUDE_CREDS) || fs.existsSync(CLAUDE_CACHE);
-  const out = { id: 'claude', name: 'Claude Code', installed, limits: [], stale_ms: null, error: null };
+  const out = {
+    id: 'claude', name: 'Claude Code', installed, limits: [], stale_ms: null,
+    error: null, auth_required: authRequired,
+  };
   if (!installed) { out.error = 'Claude Code not detected'; return out; }
   try {
     const st = fs.statSync(CLAUDE_CACHE);
@@ -223,7 +291,8 @@ function claudeSection() {
   } catch (e) {
     out.error = 'usage-cache.json unreadable: ' + e.code;
   }
-  if (lastRefreshError && out.stale_ms >= REFRESH_TTL_MS) out.refresh_error = lastRefreshError;
+  if (authRequired) out.refresh_error = 'auth_required';
+  else if (lastRefreshError && out.stale_ms >= REFRESH_TTL_MS) out.refresh_error = lastRefreshError;
   return out;
 }
 

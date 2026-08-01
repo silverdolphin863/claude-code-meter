@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PORT } from './server.mjs'; // importing starts the local HTTP server
 
@@ -17,6 +18,62 @@ const COMPACT_WIDTH = 1100;
 const COMPACT_MIN = 560;
 const PEEK = 3;          // pixels left on screen while hidden, the hover target
 const SLIDE_MS = 140;
+
+function findExecutable(name) {
+  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  for (const folder of String(process.env.PATH || '').split(path.delimiter)) {
+    const cleanFolder = folder.replace(/^"|"$/g, '');
+    if (!cleanFolder) continue;
+    for (const extension of extensions) {
+      const candidate = path.join(cleanFolder, name + extension);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function spawnDetached(command, args) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false });
+    } catch (error) {
+      resolve({ ok: false, error: String(error.code || error.message || 'launch failed') });
+      return;
+    }
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    child.once('spawn', () => {
+      child.unref();
+      finish({ ok: true });
+    });
+    child.once('error', (error) => {
+      finish({ ok: false, error: String(error.code || error.message || 'launch failed') });
+    });
+  });
+}
+
+async function launchClaudeLogin() {
+  const claude = findExecutable('claude');
+  if (!claude) return { ok: false, error: 'Claude CLI not found' };
+
+  if (process.platform === 'win32') {
+    const terminal = findExecutable('wt');
+    if (!terminal) return { ok: false, error: 'Windows Terminal not found' };
+    return spawnDetached(terminal, [
+      'new-tab', '--title', 'CC Meter - Claude Login',
+      claude, 'auth', 'login', '--claudeai',
+    ]);
+  }
+
+  return spawnDetached(claude, ['auth', 'login', '--claudeai']);
+}
+
+ipcMain.handle('widget:reauth-claude', launchClaudeLogin);
 
 function loadState() {
   try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; }

@@ -58,6 +58,10 @@
   button.icon.refresh { display: flex; width: 22px; height: 22px; }
   button.icon.refresh.busy svg { animation: spin 0.8s linear infinite; }
   button.icon.refresh:disabled { opacity: 0.55; cursor: wait; }
+  button.icon.refresh .login-glyph { display: none; }
+  button.icon.refresh.auth { color: var(--hot); }
+  button.icon.refresh.auth .refresh-glyph { display: none; }
+  button.icon.refresh.auth .login-glyph { display: block; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---------- full mode ---------- */
@@ -204,9 +208,13 @@
     <span class="age" id="age"></span>
     <span class="dot" id="dot"></span>
     <button class="icon refresh" id="refreshF" title="Refresh data" aria-label="Refresh data">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <svg class="refresh-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4"/>
+      </svg>
+      <svg class="login-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3"/>
       </svg>
     </button>
     <button class="icon" id="gearF" title="Settings">
@@ -235,9 +243,13 @@
   <span class="age" id="age2"></span>
   <span class="dot" id="dot2"></span>
   <button class="icon refresh" id="refreshC" title="Refresh data" aria-label="Refresh data">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    <svg class="refresh-glyph" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4"/>
+    </svg>
+    <svg class="login-glyph" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3"/>
     </svg>
   </button>
   <span class="swlabel" id="swlabel">auto</span>
@@ -507,21 +519,41 @@ function render() {
 
   const errs = visibleSections()
     .filter((s) => s.refresh_error)
-    .map((s) => s.refresh_error.includes('401') ? 'Claude login expired' : 'Refresh failed')
+    .map((s) => s.auth_required ? 'Claude login expired' : 'Refresh failed')
     .join(', ');
   const tip = 'Updated ' + (dataAge < 60 ? 'just now' : fmtAge(dataAge) + ' ago')
     + (errs ? '. ' + errs : '.');
   for (const id of ['dot', 'dot2', 'age', 'age2']) setTitle(id, tip);
+  paintRefresh(uiRefreshing);
 }
 
 let uiRefreshing = false;
+let reconnectStarted = false;
+let reconnectError = '';
+let reconnectPollTimer = null;
+
+function claudeAuthRequired() {
+  return Boolean(data?.sections?.find((section) => section.id === 'claude')?.auth_required);
+}
+
 function paintRefresh(busy) {
   uiRefreshing = busy;
+  const canReconnect = claudeAuthRequired() && Boolean(window.widget?.reauthClaude);
+  if (!claudeAuthRequired()) {
+    reconnectStarted = false;
+    reconnectError = '';
+  }
   for (const id of ['refreshF', 'refreshC']) {
     const button = document.getElementById(id);
     if (!button) continue;
     button.disabled = busy;
     button.classList.toggle('busy', busy);
+    button.classList.toggle('auth', canReconnect);
+    const title = canReconnect
+      ? reconnectError || (reconnectStarted ? 'Complete Claude login in the terminal' : 'Reconnect Claude')
+      : busy ? 'Refreshing data' : 'Refresh data';
+    if (button.title !== title) button.title = title;
+    button.setAttribute('aria-label', title);
   }
 }
 
@@ -534,6 +566,40 @@ async function poll(manual = false) {
   } catch { /* keep the last good values on screen */ }
   if (manual) paintRefresh(false);
   render();
+}
+
+function watchClaudeReconnect() {
+  if (reconnectPollTimer) clearInterval(reconnectPollTimer);
+  const deadline = Date.now() + 5 * 60_000;
+  reconnectPollTimer = setInterval(async () => {
+    await poll();
+    if (!claudeAuthRequired() || Date.now() >= deadline) {
+      clearInterval(reconnectPollTimer);
+      reconnectPollTimer = null;
+      if (claudeAuthRequired()) {
+        reconnectStarted = false;
+        paintRefresh(false);
+      }
+    }
+  }, 2000);
+}
+
+async function activateRefresh() {
+  if (!claudeAuthRequired() || !window.widget?.reauthClaude) {
+    await poll(true);
+    return;
+  }
+
+  paintRefresh(true);
+  const result = await window.widget.reauthClaude();
+  if (result?.ok) {
+    reconnectStarted = true;
+    reconnectError = '';
+    watchClaudeReconnect();
+  } else {
+    reconnectError = result?.error || 'Could not open Claude login';
+  }
+  paintRefresh(false);
 }
 
 function setMode(next) {
@@ -629,7 +695,7 @@ for (const id of ['gearF', 'gearC']) {
 }
 for (const id of ['refreshF', 'refreshC']) {
   const el = document.getElementById(id);
-  if (el) el.onclick = () => poll(true);
+  if (el) el.onclick = activateRefresh;
 }
 
 poll();
