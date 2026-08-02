@@ -128,6 +128,7 @@ function createWindow() {
     title: 'CC Meter',
     webPreferences: { preload: path.join(DIR, 'preload.cjs') },
   });
+  let widgetVisible = true;
 
   win.setAlwaysOnTop(true, 'floating');
 
@@ -186,7 +187,7 @@ function createWindow() {
       const b = win.getBounds();
       if (isFullGeometry(b)) persist({ full: b });
     }
-    if (!quitting) { e.preventDefault(); win.hide(); }
+    if (!quitting) { e.preventDefault(); concealWidget(); }
   });
 
   // ---- auto-hide: slide the strip above the screen edge until hovered ----
@@ -342,12 +343,29 @@ function createWindow() {
   // calling show() leaves it parked off screen showing a 3px sliver, which
   // looks broken. So also slide it into view and hold it there briefly.
   const STICKY_MS = 3500;
+  function concealWidget() {
+    if (win.isDestroyed()) return;
+    widgetVisible = false;
+    if (state.mode === 'full') {
+      // Keep the expanded window mounted. Native hide/show recreates the
+      // transparent compositor surface on some Windows desktops and flashes.
+      win.setIgnoreMouseEvents(true);
+      win.setOpacity(0);
+    } else {
+      win.hide();
+    }
+    buildTrayMenu();
+  }
+
   function presentWidget() {
     if (win.isDestroyed()) return;
     // Do not activate the large transparent panel when it comes from the tray.
     // Activating it makes Windows repaint the full expanded window, which is
     // visible as a flash on some desktops.
     if (!win.isVisible()) win.showInactive();
+    win.setIgnoreMouseEvents(false);
+    win.setOpacity(1);
+    widgetVisible = true;
     if (state.autohide && state.mode === 'compact') {
       startWatch();
       reveal();
@@ -359,8 +377,8 @@ function createWindow() {
   function trayToggle() {
     if (win.isDestroyed()) return;
     const parked = state.autohide && state.mode === 'compact' && !shown;
-    if (!win.isVisible() || parked) presentWidget();
-    else win.hide();
+    if (!widgetVisible || parked) presentWidget();
+    else concealWidget();
     buildTrayMenu();
   }
 
@@ -373,7 +391,7 @@ function createWindow() {
     if (!tray) return;
     const parked = state.autohide && state.mode === 'compact' && !shown;
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: win.isVisible() && !parked ? 'Hide widget' : 'Show widget',
+      { label: widgetVisible && !parked ? 'Hide widget' : 'Show widget',
         click: trayToggle },
       { type: 'separator' },
       { label: 'Compact strip', type: 'radio',
@@ -430,7 +448,7 @@ function createWindow() {
 
   win.on('closed', stopWatch);
 
-  ipcMain.on('widget:close', () => win.hide());
+  ipcMain.on('widget:close', concealWidget);
   ipcMain.on('widget:pin', (_e, pinned) => {
     win.setAlwaysOnTop(Boolean(pinned), 'floating');
     buildTrayMenu();
