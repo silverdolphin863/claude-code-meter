@@ -344,7 +344,10 @@ function createWindow() {
   const STICKY_MS = 3500;
   function presentWidget() {
     if (win.isDestroyed()) return;
-    if (!win.isVisible()) win.show();
+    // Do not activate the large transparent panel when it comes from the tray.
+    // Activating it makes Windows repaint the full expanded window, which is
+    // visible as a flash on some desktops.
+    if (!win.isVisible()) win.showInactive();
     if (state.autohide && state.mode === 'compact') {
       startWatch();
       reveal();
@@ -360,6 +363,11 @@ function createWindow() {
     else win.hide();
     buildTrayMenu();
   }
+
+  ipcMain.on('widget:tray-tooltip', (_e, text) => {
+    if (!tray || typeof text !== 'string') return;
+    tray.setToolTip(text.slice(0, 128));
+  });
 
   function buildTrayMenu() {
     if (!tray) return;
@@ -396,8 +404,19 @@ function createWindow() {
   console.log('TRAY ' + JSON.stringify({ empty: trayImg.isEmpty(), size: trayImg.getSize() }));
   tray = new Tray(trayImg);
   tray.setToolTip('CC Meter');
-  tray.on('click', trayToggle);
-  tray.on('double-click', presentWidget);
+  let trayClickTimer = null;
+  tray.on('click', () => {
+    clearTimeout(trayClickTimer);
+    trayClickTimer = setTimeout(() => {
+      trayClickTimer = null;
+      trayToggle();
+    }, 220);
+  });
+  tray.on('double-click', () => {
+    clearTimeout(trayClickTimer);
+    trayClickTimer = null;
+    presentWidget();
+  });
   win.trayToggle = trayToggle; // test seam: exercises the real tray click path
   buildTrayMenu();
   win.on('show', buildTrayMenu);

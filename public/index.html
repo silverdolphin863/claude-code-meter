@@ -278,6 +278,7 @@ const POLL_MS = 10000;
 let data = null;
 let lastOk = 0;
 let mode = 'full';
+let lastTrayTip = '';
 
 // Meter visibility: 'auto' shows a meter only when its tool is detected;
 // an explicit choice from the settings panel overrides that.
@@ -528,6 +529,23 @@ function render() {
   const tip = 'Updated ' + (dataAge < 60 ? 'just now' : fmtAge(dataAge) + ' ago')
     + (errs ? '. ' + errs : '.');
   for (const id of ['dot', 'dot2', 'age', 'age2']) setTitle(id, tip);
+
+  if (window.widget?.setTrayTooltip) {
+    const trayParts = visibleSections().flatMap((s) => {
+      const name = s.id === 'claude' ? 'Claude' : 'Codex';
+      if (s.limits.length) {
+        return [`${name} ${s.limits.map((l) => shortLabel(l.label) + ' ' + l.percent + '%').join(', ')}`];
+      }
+      if (s.auth_required) return [`${name}: login required`];
+      if (s.error) return [`${name}: unavailable`];
+      return [];
+    });
+    const trayTip = [...trayParts, 'Updated ' + (dataAge < 60 ? '<1m' : fmtAge(dataAge))].join(' | ');
+    if (trayTip !== lastTrayTip) {
+      lastTrayTip = trayTip;
+      window.widget.setTrayTooltip(trayTip);
+    }
+  }
   paintRefresh(uiRefreshing);
 }
 

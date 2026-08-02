@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('widget', {
   setAutohide: (on) => ipcRenderer.send('widget:autohide', on),
   setPrefs: (prefs) => ipcRenderer.send('widget:prefs', prefs),
   openSettings: () => ipcRenderer.send('widget:open-settings'),
+  setTrayTooltip: (text) => ipcRenderer.send('widget:tray-tooltip', text),
   reauthClaude: () => ipcRenderer.invoke('widget:reauth-claude'),
   compactMin: (width) => ipcRenderer.send('widget:compact-min', width),
   onState: (cb) => ipcRenderer.on('widget:set-state', (_e, s) => cb(s)),
