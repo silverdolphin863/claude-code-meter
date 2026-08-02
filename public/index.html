@@ -373,16 +373,12 @@ function barHtml(percent, cls, extra) {
 }
 
 function rowHtml(l) {
-  const uc = usageCls(l.percent);
-  const pace = calcPace(l.percent, l.resets_at, l.window_hours);
-  const paceHtml = pace === null ? ''
-    : '<span class="pace ' + paceCls(pace) + '">' + pace.toFixed(1) + 'x</span>';
   return '<div class="row">'
-    + '<div class="top"><span class="label">' + l.label + '</span>' + paceHtml
-    +   '<span class="pct ' + uc + '">' + l.percent + '%</span></div>'
-    + barHtml(l.percent, uc)
-    + '<div class="sub"><span>' + countdown(l.resets_at) + '</span>'
-    +   '<span>' + resetClock(l.resets_at, l.window_hours) + '</span></div>'
+    + '<div class="top"><span class="label">' + l.label + '</span>'
+    +   '<span class="pace"></span><span class="pct"></span></div>'
+    + '<div class="track"><div class="fill"></div></div>'
+    + '<div class="sub"><span class="countdown"></span>'
+    +   '<span class="reset-clock"></span></div>'
     + '</div>';
 }
 
@@ -404,13 +400,19 @@ function itemHtml(l) {
 }
 
 // Re-assigning innerHTML destroys and recreates every node, which cancels a
-// tooltip you are hovering. Only touch the DOM when the markup actually differs.
-let lastFullHtml = null;
+// tooltip you are hovering. Full mode keeps its row structure stable and
+// updates changing values in place, so countdowns cannot make the panel flash.
+let lastFullStructure = null;
 let lastStripHtml = null;
 
 function renderFull() {
+  const sections = visibleSections();
+  const structure = JSON.stringify(sections.map((s) => ({
+    id: s.id, name: s.name, plan: s.plan, error: s.error,
+    limits: s.limits.map((l) => ({ label: l.label, resets_at: l.resets_at, window_hours: l.window_hours })),
+  })));
   const out = [];
-  for (const s of visibleSections()) {
+  for (const s of sections) {
     let inner;
     if (s.error) inner = '<div class="err">' + s.error + '</div>';
     else if (!s.limits.length) inner = '<div class="empty">no data yet</div>';
@@ -418,10 +420,40 @@ function renderFull() {
     const plan = s.plan ? '<span class="plan">' + s.plan + '</span>' : '';
     out.push('<div class="card"><h2>' + s.name + plan + '</h2>' + inner + '</div>');
   }
-  const html = out.join('');
-  if (html !== lastFullHtml) {
-    lastFullHtml = html;
-    document.getElementById('out').innerHTML = html;
+  if (structure !== lastFullStructure) {
+    lastFullStructure = structure;
+    document.getElementById('out').innerHTML = out.join('');
+  }
+
+  const rows = document.querySelectorAll('#out .row');
+  let rowIndex = 0;
+  for (const s of sections) {
+    if (s.error || !s.limits.length) continue;
+    for (const l of s.limits) {
+      const row = rows[rowIndex++];
+      if (!row) continue;
+      const uc = usageCls(l.percent);
+      const pace = calcPace(l.percent, l.resets_at, l.window_hours);
+      const paceEl = row.querySelector('.pace');
+      const pctEl = row.querySelector('.pct');
+      const fillEl = row.querySelector('.fill');
+      if (paceEl) {
+        paceEl.className = 'pace' + (pace === null ? '' : ' ' + paceCls(pace));
+        paceEl.textContent = pace === null ? '' : pace.toFixed(1) + 'x';
+      }
+      if (pctEl) {
+        pctEl.className = 'pct ' + uc;
+        pctEl.textContent = l.percent + '%';
+      }
+      if (fillEl) {
+        fillEl.className = 'fill bar-' + uc;
+        fillEl.style.width = Math.max(0, Math.min(100, l.percent)) + '%';
+      }
+      const countdownEl = row.querySelector('.countdown');
+      const resetEl = row.querySelector('.reset-clock');
+      if (countdownEl) countdownEl.textContent = countdown(l.resets_at);
+      if (resetEl) resetEl.textContent = resetClock(l.resets_at, l.window_hours);
+    }
   }
 }
 
