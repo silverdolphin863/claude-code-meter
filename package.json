@@ -10,6 +10,7 @@
     "start": "electron .",
     "serve": "node server.mjs",
     "test": "node test.mjs",
+    "docs:capture": "powershell -NoProfile -ExecutionPolicy Bypass -File docs/capture-panel.ps1 && electron docs/capture-showcase.mjs",
     "dist": "electron-builder --win",
     "pack": "electron-builder --win --dir"
   },

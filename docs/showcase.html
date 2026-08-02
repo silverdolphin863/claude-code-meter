@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CC Meter showcase</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 1280px;
+      height: 720px;
+      margin: 0;
+      overflow: hidden;
+      background: #0d0c13;
+      color: #f4f1fb;
+      font-family: "Segoe UI", Inter, Arial, sans-serif;
+    }
+
+    body {
+      position: relative;
+    }
+
+    .canvas {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      background: #0d0c13;
+      border: 1px solid #292433;
+    }
+
+    .accent-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 7px;
+      display: flex;
+    }
+
+    .accent-bar span:nth-child(1) { width: 34%; background: #38d47d; }
+    .accent-bar span:nth-child(2) { width: 33%; background: #ffb348; }
+    .accent-bar span:nth-child(3) { flex: 1; background: #ff625f; }
+
+    .copy {
+      position: absolute;
+      top: 68px;
+      left: 72px;
+      width: 570px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 44px;
+    }
+
+    .brand img {
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+    }
+
+    .brand-name {
+      font-size: 24px;
+      font-weight: 760;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-type {
+      margin-top: 3px;
+      color: #8f879f;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+    }
+
+    h1 {
+      max-width: 560px;
+      margin: 0;
+      font-size: 58px;
+      line-height: 1.02;
+      letter-spacing: -0.045em;
+      font-weight: 780;
+    }
+
+    .lead {
+      max-width: 540px;
+      margin: 25px 0 31px;
+      color: #b8b0c7;
+      font-size: 21px;
+      line-height: 1.48;
+    }
+
+    .features {
+      display: grid;
+      gap: 11px;
+      width: 535px;
+    }
+
+    .feature {
+      display: grid;
+      grid-template-columns: 5px 136px 1fr;
+      align-items: center;
+      min-height: 52px;
+      padding: 0 18px 0 0;
+      overflow: hidden;
+      background: #17151f;
+      border: 1px solid #2c2737;
+      border-radius: 12px;
+    }
+
+    .feature::before {
+      content: "";
+      align-self: stretch;
+      background: var(--feature-color);
+    }
+
+    .feature strong {
+      padding-left: 17px;
+      color: #f1edf8;
+      font-size: 15px;
+      letter-spacing: 0.01em;
+    }
+
+    .feature span {
+      color: #948ca3;
+      font-size: 14px;
+    }
+
+    .footnote {
+      margin-top: 25px;
+      color: #746d82;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+    }
+
+    .product-stage {
+      position: absolute;
+      top: 56px;
+      right: 38px;
+      width: 560px;
+      height: 614px;
+      background: #15131c;
+      border: 1px solid #302a3b;
+      border-radius: 34px;
+    }
+
+    .product-stage::before {
+      content: "";
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: #38d47d;
+      box-shadow: -22px 0 #ffb348, -44px 0 #ff625f;
+    }
+
+    .stage-label {
+      position: absolute;
+      top: 22px;
+      left: 26px;
+      color: #8d849d;
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: 0.16em;
+    }
+
+    .panel-shot {
+      position: absolute;
+      top: 45px;
+      left: 25px;
+      width: 510px;
+      height: auto;
+      filter: drop-shadow(0 24px 35px rgba(0, 0, 0, 0.38));
+    }
+  </style>
+</head>
+<body>
+  <main class="canvas" aria-label="CC Meter product showcase">
+    <div class="accent-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <section class="copy">
+      <div class="brand">
+        <img src="../build/icon.png" alt="">
+        <div>
+          <div class="brand-name">CC Meter</div>
+          <div class="brand-type">WINDOWS TRAY GAUGE</div>
+        </div>
+      </div>
+
+      <h1>Know when your AI quota will run out.</h1>
+      <p class="lead">Current Claude Code and Codex limits, reset times, and burn pace in one local tray widget.</p>
+
+      <div class="features">
+        <div class="feature" style="--feature-color:#38d47d">
+          <strong>Current limits</strong>
+          <span>Account-wide usage from both tools</span>
+        </div>
+        <div class="feature" style="--feature-color:#ffb348">
+          <strong>Reset times</strong>
+          <span>See exactly when each window renews</span>
+        </div>
+        <div class="feature" style="--feature-color:#ff625f">
+          <strong>Burn pace</strong>
+          <span>Know if you will hit the wall early</span>
+        </div>
+      </div>
+
+      <div class="footnote">WINDOWS / LOCAL-ONLY / MIT</div>
+    </section>
+
+    <section class="product-stage" aria-label="CC Meter full panel">
+      <div class="stage-label">FULL PANEL</div>
+      <img class="panel-shot" src="panel.png" alt="CC Meter full panel showing Claude Code and Codex usage">
+    </section>
+  </main>
+</body>
+</html>

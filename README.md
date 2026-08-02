@@ -3,10 +3,12 @@
 A tray widget for Windows that shows how much of your **Claude Code** and **Codex**
 rate limits you have burned, and how fast you are burning them.
 
+![CC Meter overview](docs/showcase.png)
+
+<p align="center"><sub>Representative usage rendered by the v1.0.4 full panel at native resolution.</sub></p>
+
 Not a cost tracker. It answers the only question that matters mid-session: *am I
 going to hit the wall before this window resets?*
-
-![CC Meter compact strip](docs/strip.png)
 
 ## What it shows
 
@@ -25,6 +27,15 @@ coasting. `1.6x` means you will hit the wall early, and roughly how early.
 
 Two modes: a compact strip that docks against the top edge of the screen (with
 optional auto-hide until you touch the edge), and a full panel with countdowns.
+
+<p align="center">
+  <img src="docs/panel.png" width="510" alt="CC Meter full panel with Claude Code and Codex usage, reset times, and pace badges">
+</p>
+
+The compact mode stays out of the way at the top edge. [Open the compact strip
+at its full native resolution](docs/strip.png).
+
+<a href="docs/strip.png"><img src="docs/strip.png" alt="CC Meter compact strip"></a>
 
 ## Install
 
