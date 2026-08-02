@@ -27,6 +27,8 @@ coasting. `1.6x` means you will hit the wall early, and roughly how early.
 
 Two modes: a compact strip that docks against the top edge of the screen (with
 optional auto-hide until you touch the edge), and a full panel with countdowns.
+While dragging the compact strip, it stays snapped to the top edge and fully
+inside the active monitor's work area.
 
 <p align="center">
   <img src="docs/panel.png" width="510" alt="CC Meter full panel with Claude Code and Codex usage, reset times, and pace badges">

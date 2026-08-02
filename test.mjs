@@ -4,6 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { constrainCompactBounds } from './window-geometry.mjs';
+
+const workArea = { x: 100, y: 40, width: 1920, height: 1040 };
+assert.deepEqual(
+  constrainCompactBounds({ x: -600, y: 300, width: 1100, height: 29 }, workArea),
+  { x: 100, y: 40, width: 1100, height: 29 },
+);
+assert.deepEqual(
+  constrainCompactBounds({ x: 1800, y: -100, width: 1100, height: 29 }, workArea),
+  { x: 920, y: 40, width: 1100, height: 29 },
+);
+assert.deepEqual(
+  constrainCompactBounds({ x: 400, y: 80, width: 2000, height: 29 }, workArea),
+  { x: 120, y: 40, width: 1900, height: 29 },
+);
+console.log('compact geometry: PASS');
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccmeter-clean-install-'));
 const claude = path.join(root, '.claude');

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PORT } from './server.mjs'; // importing starts the local HTTP server
+import { constrainCompactBounds } from './window-geometry.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -99,7 +100,8 @@ const workAreaFor = (win) => screen.getDisplayNearestPoint(win.getBounds()).work
 function compactBounds(win, desiredWidth) {
   const area = workAreaFor(win);
   const want = desiredWidth || state.compactWidth || COMPACT_WIDTH;
-  const width = Math.min(Math.max(want, COMPACT_MIN), area.width - 20);
+  const maxWidth = Math.max(1, area.width - 20);
+  const width = Math.min(Math.max(want, COMPACT_MIN), maxWidth);
   return {
     x: Math.round(area.x + (area.width - width) / 2),
     y: area.y,
@@ -162,7 +164,20 @@ function createWindow() {
       }
     }, 400);
   };
-  win.on('moved', remember);
+  const snapCompactToWorkArea = () => {
+    if (win.isDestroyed() || state.mode !== 'compact' || programmatic) return;
+    const current = win.getBounds();
+    const next = constrainCompactBounds(current, workAreaFor(win), 20, Math.max(COMPACT_MIN, runtimeMin));
+    if (next.x !== current.x || next.y !== current.y || next.width !== current.width) {
+      setBounds(next);
+    }
+  };
+  const handleMove = () => {
+    snapCompactToWorkArea();
+    remember();
+  };
+  win.on('move', handleMove);
+  win.on('moved', handleMove);
   win.on('resized', remember);
 
   // Closing hides to the tray. Quitting is an explicit tray action.
@@ -413,12 +428,18 @@ function createWindow() {
   ipcMain.on('widget:compact-resize', (_e, width) => {
     if (win.isDestroyed() || state.mode !== 'compact') return;
     const area = workAreaFor(win);
-    const w = Math.min(Math.max(Number(width) || 0, runtimeMin), area.width - 20);
+    const maxWidth = Math.max(1, area.width - 20);
+    const w = Math.min(Math.max(Number(width) || 0, runtimeMin), maxWidth);
     persist({ compactWidth: w });
     const cur = win.getBounds();
     // Keep the current height: while the settings panel is open the window is
     // taller than the strip, and this resize must not slam it back to 30px.
-    setBounds({ ...compactBounds(win, w), y: cur.y, height: cur.height });
+    setBounds(constrainCompactBounds(
+      { ...compactBounds(win, w), y: cur.y, height: cur.height },
+      area,
+      20,
+      Math.max(COMPACT_MIN, runtimeMin),
+    ));
   });
 
   // The page reports the narrowest width at which no gauge label clips.
@@ -427,7 +448,12 @@ function createWindow() {
     if (w < 300 || w > 2400) return;
     runtimeMin = Math.max(COMPACT_MIN, w);
     if (state.mode === 'compact' && !win.isDestroyed() && win.getBounds().width < runtimeMin) {
-      setBounds({ ...compactBounds(win, runtimeMin), y: win.getBounds().y });
+      setBounds(constrainCompactBounds(
+        { ...compactBounds(win, runtimeMin), y: win.getBounds().y },
+        workAreaFor(win),
+        20,
+        runtimeMin,
+      ));
     }
   });
 
@@ -511,6 +537,15 @@ app.whenReady().then(async () => {
         if (process.env.WIDGET_MODE === 'compact') win.setBounds(compactBounds(win));
       }
       await new Promise((r) => setTimeout(r, 2000));
+      if (process.env.WIDGET_SNAP_TEST && state.mode === 'compact') {
+        const b = win.getBounds();
+        // Bypass the wrapper deliberately: this simulates the native drag event.
+        win.setPosition(b.x - b.width - 40, b.y + COMPACT_HEIGHT + 120);
+        await new Promise((r) => setTimeout(r, 300));
+        const snapBounds = win.getBounds();
+        console.log('SNAP_TEST ' + JSON.stringify(snapBounds));
+        fs.writeFileSync(`${process.env.WIDGET_CAPTURE}.bounds.json`, JSON.stringify(snapBounds));
+      }
       if (process.env.WIDGET_EVAL) {
         const res = await win.webContents.executeJavaScript(process.env.WIDGET_EVAL);
         console.log('EVAL ' + JSON.stringify(res));

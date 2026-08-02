@@ -27,6 +27,7 @@
     },
     "files": [
       "main.mjs",
+      "window-geometry.mjs",
       "preload.cjs",
       "server.mjs",
       "public/**/*",
