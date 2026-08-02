@@ -19,8 +19,9 @@ coasting. `1.6x` means you will hit the wall early, and roughly how early.
 - **Claude Code** - 5-hour window, weekly all-models, and weekly per-model
   (Opus, Fable, whichever your plan scopes). The per-model split is real, it
   comes from the same source the `/usage` screen uses.
-- **Codex** - 5-hour and weekly. One shared pool; Codex exposes no per-model
-  split.
+- **Codex** - the account-wide windows Codex currently reports. One shared
+  pool; some plans expose only a weekly window, and CC Meter never invents a
+  missing one.
 
 Two modes: a compact strip that docks against the top edge of the screen (with
 optional auto-hide until you touch the edge), and a full panel with countdowns.
@@ -32,9 +33,9 @@ Download `CCMeter-Setup-x.y.z.exe` from
 
 **The installer is unsigned**, so Windows SmartScreen will show
 "Windows protected your PC". Click **More info** -> **Run anyway**. If you would
-rather not trust a binary from a stranger on the internet, build it yourself, it
-takes one command (see below). That is the honest answer and it is why the
-source is here.
+rather not trust a binary from a stranger on the internet, build it yourself
+from the source below. That is the honest answer and it is why the source is
+here.
 
 ## Where the numbers come from
 
@@ -62,8 +63,9 @@ already passed.
 
 CC Meter reads your Claude OAuth token off disk and sends it to
 `api.anthropic.com` and nowhere else. It is never logged, never stored anywhere
-new, and never transmitted to any host but Anthropic's. `server.mjs` is about
-300 lines; the entire network surface is one `fetch` call. Read it.
+new, and never transmitted to any host but Anthropic's. The direct Claude
+network path is isolated in `refreshClaudeUsage()` in `server.mjs`. Codex
+authentication and account requests remain inside the installed Codex CLI.
 
 The usage endpoint is undocumented and rate-limited (observed: HTTP 429 with a
 ~57 minute `Retry-After`). CC Meter refreshes at most once every 10 minutes,
