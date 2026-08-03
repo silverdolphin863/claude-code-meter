@@ -32,12 +32,14 @@ export function canCheck() {
   return isPackaged() && !busy;
 }
 
-export async function checkForUpdates(parentWindow) {
+export async function checkForUpdates() {
   if (busy) return;
   busy = true;
-  const opts = parentWindow && !parentWindow.isDestroyed() ? parentWindow : null;
-  const show = (options) => (opts ? dialog.showMessageBox(opts, options)
-                                  : dialog.showMessageBox(options));
+  // Deliberately unparented: a dialog parented to the main window is anchored
+  // to it, and in compact mode that window is a 30px strip glued to the top
+  // screen edge, so the dialog appeared jammed against the top. Unparented
+  // message boxes centre on the screen. Modality is not worth that.
+  const show = (options) => dialog.showMessageBox(options);
 
   try {
     if (!isPackaged()) {

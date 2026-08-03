@@ -446,7 +446,7 @@ function createWindow() {
       { label: 'Settings...', click: () => openSettings() },
       // The ONLY entry point to the updater. Nothing checks on launch, on
       // focus, or on a timer, by design: see updater.mjs.
-      { label: 'Check for updates...', click: () => checkForUpdates(win) },
+      { label: 'Check for updates...', click: () => checkForUpdates() },
       { label: 'Quit CC Meter', click: () => { quitting = true; app.quit(); } },
     ]));
   }
