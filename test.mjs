@@ -21,6 +21,37 @@ assert.deepEqual(
 );
 console.log('compact geometry: PASS');
 
+// v1.0.6 shipped a package whose asar was missing updater.mjs, because
+// build.files is a whitelist and the new module was never added to it. The app
+// crashed on launch with ERR_MODULE_NOT_FOUND, and only in the packaged build,
+// so every dev run looked fine. Walk main.mjs's local imports and assert each
+// one would actually be packaged.
+{
+  const pkg = JSON.parse(await fs.readFile(new URL('./package.json', import.meta.url), 'utf8'));
+  const patterns = pkg.build.files.filter((p) => !p.startsWith('!'));
+  const packaged = (file) => patterns.some((p) => {
+    if (p === file) return true;
+    const m = /^\*(\.[a-z]+)$/.exec(p); // "*.mjs" style top-level glob
+    return Boolean(m) && file.endsWith(m[1]) && !file.includes('/');
+  });
+
+  const seen = new Set();
+  const queue = ['main.mjs'];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const src = await fs.readFile(new URL('./' + file, import.meta.url), 'utf8');
+    for (const m of src.matchAll(/^import[^'"]*['"](\.[^'"]+)['"]/gm)) {
+      const dep = m[1].replace(/^\.\//, '');
+      assert.ok(packaged(dep), `${dep} is imported by ${file} but build.files would not package it`);
+      queue.push(dep);
+    }
+  }
+  assert.ok(seen.has('updater.mjs'), 'expected updater.mjs in the import graph');
+  console.log(`packaged imports (${seen.size} modules): PASS`);
+}
+
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccmeter-clean-install-'));
 const claude = path.join(root, '.claude');
 const codex = path.join(root, '.codex', 'sessions', 'fixture');

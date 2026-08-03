@@ -1,6 +1,6 @@
 {
   "name": "cc-meter",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "type": "module",
   "description": "Tray gauge for Claude Code and Codex rate limits",
@@ -26,10 +26,9 @@
       "buildResources": "build"
     },
     "files": [
-      "main.mjs",
-      "window-geometry.mjs",
+      "*.mjs",
+      "!test.mjs",
       "preload.cjs",
-      "server.mjs",
       "public/**/*",
       "assets/**/*",
       "package.json"

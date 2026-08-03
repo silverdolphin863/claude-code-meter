@@ -13,6 +13,14 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 // package `name` and the packaged build uses `productName`, so they read two
 // different settings files and preferences appear to vanish after packaging.
 app.setName('CC Meter');
+
+// A GUI app cannot assume anyone is reading stdout. If whatever consumed the
+// pipe goes away, the next console.log throws EPIPE, and an unhandled throw in
+// the main process puts a JavaScript-error dialog on the user's screen. Losing
+// a log line is never worth that.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on?.('error', () => {});
+}
 const STATE = path.join(app.getPath('userData'), 'window-state.json');
 
 const COMPACT_HEIGHT = 29;
