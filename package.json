@@ -1,6 +1,6 @@
 {
   "name": "cc-meter",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "type": "module",
   "description": "Tray gauge for Claude Code and Codex rate limits",
