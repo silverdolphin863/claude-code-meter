@@ -544,7 +544,7 @@ function createWindow() {
     const area = workAreaFor(win);
     settingsWin = new BrowserWindow({
       width: 280,
-      height: 296,
+      height: 396,
       x: Math.round(area.x + area.width - 300),
       y: area.y + 40,
       frame: false,

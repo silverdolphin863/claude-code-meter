@@ -49,6 +49,17 @@
   label input { accent-color: var(--accent); width: 14px; height: 14px; }
   label .na { font-size: 10px; color: var(--dim); margin-left: auto; }
   .hint { font-size: 10.5px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+  .acct { display: flex; align-items: center; gap: 8px; padding: 3px 0 1px; }
+  .acct span { font-size: 12.5px; flex: 1; }
+  .acct span.bad { color: #ff9f45; }
+  .acct span.good { color: #3ddc84; }
+  .btn {
+    flex: none; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); font-size: 11.5px; font-weight: 600;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -61,13 +72,21 @@
   <h2>Meters</h2>
   <label><input type="checkbox" id="mClaude"> Claude Code <span class="na" id="naClaude"></span></label>
   <label><input type="checkbox" id="mCodex"> Codex <span class="na" id="naCodex"></span></label>
+  <p class="hint">A tool that is not installed is hidden automatically. Ticking
+  a box overrides that.</p>
 
   <h2>Behavior</h2>
   <label><input type="checkbox" id="ah"> Auto-hide the strip until hovered</label>
   <label><input type="checkbox" id="rt"> Show reset time in the strip</label>
 
-  <p class="hint">Meters follow detection by default: a tool that is not
-  installed is hidden automatically. Ticking a box overrides that.</p>
+  <h2>Claude account</h2>
+  <div class="acct">
+    <span id="authState">checking...</span>
+    <button id="reauth" class="btn">Reconnect</button>
+  </div>
+  <p class="hint" id="authHint">CC Meter reads Claude usage with the login the
+  Claude CLI already holds. When it expires the numbers stop updating, and
+  reconnecting opens the normal Claude login in a terminal.</p>
 </main>
 </div>
 
@@ -98,10 +117,56 @@ window.widget.onState((s) => {
   paint();
 });
 
-fetch('/usage.json').then((r) => r.json()).then((j) => {
-  sections = j.sections || [];
-  paint();
-}).catch(() => {});
+// The strip's only signal that the Claude login died is the refresh button
+// swapping its glyph, which is far too subtle to find. State it in words here,
+// with a button that does something about it.
+let reconnecting = false;
+
+function paintAuth() {
+  const claude = sections.find((x) => x.id === 'claude');
+  const state = document.getElementById('authState');
+  const button = document.getElementById('reauth');
+  if (!claude || claude.installed === false) {
+    state.textContent = 'Claude Code not detected';
+    state.className = '';
+    button.disabled = true;
+    return;
+  }
+  const expired = Boolean(claude.auth_required);
+  if (!expired) reconnecting = false; // the login landed, stop saying "finish it"
+  state.textContent = reconnecting ? 'Finish the login in the terminal'
+    : expired ? 'Login expired' : 'Connected';
+  state.className = reconnecting ? '' : expired ? 'bad' : 'good';
+  button.disabled = reconnecting;
+  // Reconnecting while still connected is harmless and is the only recovery
+  // if the token is bad in a way the check cannot see, so never disable it.
+  button.textContent = expired ? 'Reconnect' : 'Reconnect anyway';
+}
+
+async function loadUsage() {
+  try {
+    const j = await (await fetch('/usage.json', { cache: 'no-store' })).json();
+    sections = j.sections || [];
+    paint();
+    paintAuth();
+  } catch { /* keep whatever is on screen */ }
+}
+loadUsage();
+setInterval(loadUsage, 5000); // reflects a completed login without reopening
+
+document.getElementById('reauth').onclick = async () => {
+  if (!window.widget?.reauthClaude) return;
+  reconnecting = true;
+  paintAuth();
+  const result = await window.widget.reauthClaude();
+  if (!result?.ok) {
+    reconnecting = false;
+    document.getElementById('authHint').textContent =
+      (result?.error || 'Could not open the Claude login') +
+      '. Run "claude auth login --claudeai" in a terminal instead.';
+  }
+  paintAuth();
+};
 
 for (const [id, box] of [['claude', 'mClaude'], ['codex', 'mCodex']]) {
   document.getElementById(box).onchange = (e) => {
