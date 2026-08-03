@@ -187,6 +187,9 @@ let lastRefreshAttemptAt = 0;
 let authRequired = false;
 let blockedCredentialsMtimeMs = 0;
 let blockedCacheMtimeMs = 0;
+// How long the widget may sit on "Login expired" before it re-probes anyway.
+let authBlockedAt = 0;
+const AUTH_RECHECK_MS = 15 * 60_000;
 
 function credentialsMtime() {
   try { return fs.statSync(CLAUDE_CREDS).mtimeMs; } catch { return 0; }
@@ -217,6 +220,9 @@ try {
       && Math.max(credentialsMtime(), cacheMtime()) > backoffMtimeMs;
     if (!recoveredAfterLegacyFailure) {
       authRequired = true;
+      // Continue the re-probe clock from when the lockout was written, so a
+      // restart neither resets it nor probes on every poll.
+      authBlockedAt = backoffMtimeMs || Date.now();
       blockedCredentialsMtimeMs = savedCredentialsMtimeMs || credentialsMtime();
       blockedCacheMtimeMs = savedCacheMtimeMs || cacheMtime();
       lastRefreshError = 'auth_required';
@@ -240,6 +246,7 @@ function saveBackoff() {
 
 function markAuthRequired() {
   authRequired = true;
+  authBlockedAt = Date.now();
   blockedCredentialsMtimeMs = credentialsMtime();
   blockedCacheMtimeMs = cacheMtime();
   lastRefreshError = 'auth_required';
@@ -250,6 +257,7 @@ function markAuthRequired() {
 
 function clearRefreshFailure() {
   authRequired = false;
+  authBlockedAt = 0;
   blockedCredentialsMtimeMs = 0;
   blockedCacheMtimeMs = 0;
   lastRefreshError = null;
@@ -263,7 +271,15 @@ async function refreshClaudeUsage(force = false) {
   if (authRequired) {
     const credentialsChanged = credentialsMtime() > blockedCredentialsMtimeMs;
     const cacheChanged = hasNewReadableCache();
-    if (!credentialsChanged && !cacheChanged) return;
+    // Waiting for the credentials file to change is the right default, since
+    // retrying a token the server just rejected only burns a rate limit. But
+    // it is not sufficient: a re-login can leave the mtime equal (same-second
+    // rewrite, or the CLI refreshing in place), and then the widget claims
+    // "Login expired" forever while `claude auth status` says logged in.
+    // So re-probe on a slow timer as a floor. NOT `>=` on the mtime: when the
+    // file is unchanged the two are equal, so that would retry every poll.
+    const overdue = Date.now() - authBlockedAt >= AUTH_RECHECK_MS;
+    if (!credentialsChanged && !cacheChanged && !overdue) return;
     clearRefreshFailure();
     lastRefreshAttemptAt = 0;
   }
@@ -347,6 +363,12 @@ function claudeSection() {
     out.stale_ms = Date.now() - st.mtimeMs;
     const raw = JSON.parse(fs.readFileSync(CLAUDE_CACHE, 'utf8'));
     for (const l of raw.limits || []) {
+      // Drop windows that have already reset. Their percent is a leftover from
+      // the previous window, and pace divides by elapsed time, so a reset time
+      // in the past yields a confident, wrong number (this is exactly how a
+      // stale cache once showed "25% 0.3x" for a window that ended 18h ago).
+      // The Codex path already filters these; Claude's did not.
+      if (l.resets_at && new Date(l.resets_at).getTime() <= Date.now()) continue;
       out.limits.push({
         label: labelFor(l),
         percent: l.percent,
@@ -692,7 +714,14 @@ server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') console.log('port ' + PORT + ' already serving, reusing it');
   else throw e;
 });
-server.listen(PORT, () => {
+// Loopback by default: this endpoint reports how heavily you use your AI
+// subscriptions, which is nobody else's business on a shared network. Node
+// binds every interface when no host is given, so it must be explicit.
+// Set CCMETER_HOST=0.0.0.0 to expose it deliberately, e.g. to drive a panel
+// on another device.
+const HOST = process.env.CCMETER_HOST || '127.0.0.1';
+
+server.listen(PORT, HOST, () => {
   console.log('usage widget on http://localhost:' + PORT);
   // Start the Codex query while the window is still opening, so the live
   // numbers are usually cached by the time the first poll arrives.

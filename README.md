@@ -5,7 +5,7 @@ rate limits you have burned, and how fast you are burning them.
 
 ![CC Meter overview](docs/showcase.png)
 
-<p align="center"><sub>Representative usage rendered by the v1.0.4 full panel at native resolution.</sub></p>
+<p align="center"><sub>Representative usage rendered by the full panel at native resolution.</sub></p>
 
 Not a cost tracker. It answers the only question that matters mid-session: *am I
 going to hit the wall before this window resets?*

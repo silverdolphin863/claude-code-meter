@@ -63,7 +63,12 @@ await fs.writeFile(credentials, JSON.stringify({
   claudeAiOauth: { accessToken: 'expired-test-token' },
 }));
 await fs.writeFile(path.join(claude, 'usage-cache.json'), JSON.stringify({
-  limits: [{ kind: 'session', percent: 12, resets_at: new Date(now + 3600000).toISOString(), severity: 'normal', is_active: true }],
+  limits: [
+    { kind: 'session', percent: 12, resets_at: new Date(now + 3600000).toISOString(), severity: 'normal', is_active: true },
+    // Already reset. Its percent belongs to the previous window and pace would
+    // divide by a negative remaining time, so it must never reach the UI.
+    { kind: 'weekly_all', percent: 91, resets_at: new Date(now - 3600000).toISOString(), severity: 'normal', is_active: false },
+  ],
 }));
 const staleAt = now - 98 * 3600000;
 await fs.writeFile(path.join(codex, 'session.jsonl'), JSON.stringify({
@@ -148,6 +153,7 @@ try {
   const codexSection = body.sections.find((section) => section.id === 'codex');
   assert.equal(claudeSection.installed, true);
   assert.equal(claudeSection.limits[0].percent, 12);
+  assert.equal(claudeSection.limits.length, 1, 'an already-reset Claude window must be dropped, not shown with stale numbers');
   assert.equal(codexSection.installed, true);
   // The first poll must NOT wait for the live Codex query: a cold app-server
   // spawn took long enough that the whole widget, Claude included, sat blank
