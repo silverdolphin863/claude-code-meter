@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('widget', {
   setMode: (mode) => ipcRenderer.send('widget:mode', mode),
   compactWidth: (width) => ipcRenderer.send('widget:compact-width', width),
   compactResize: (width) => ipcRenderer.send('widget:compact-resize', width),
+  fullResize: (left, width) => ipcRenderer.send('widget:full-resize', left, width),
   setAutohide: (on) => ipcRenderer.send('widget:autohide', on),
   setPrefs: (prefs) => ipcRenderer.send('widget:prefs', prefs),
   openSettings: () => ipcRenderer.send('widget:open-settings'),

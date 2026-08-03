@@ -122,7 +122,13 @@ function createWindow() {
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
-    resizable: true,
+    // The OS resize border is all-or-nothing: enabling it puts an ns-resize
+    // cursor on the top and bottom edges, which is nonsense here. Height is
+    // content-derived in full mode and fixed in compact mode, so vertical
+    // resizing has nothing to do. Width is resized through our own edge
+    // handles instead (widget:compact-resize / widget:full-resize), which
+    // gives an ew-resize cursor only where it means something.
+    resizable: false,
     alwaysOnTop: true,
     skipTaskbar: true, // lives in the tray, not the taskbar
     title: 'CC Meter',
@@ -479,6 +485,23 @@ function createWindow() {
     ));
   });
 
+  // Horizontal drag-resize for the full panel. Unlike the centred strip, this
+  // window is free-floating, so the left edge moves x while the right edge does
+  // not. The window is not OS-resizable, so this is the only path in and it has
+  // to persist the result itself: 'resized' never fires for it.
+  ipcMain.on('widget:full-resize', (_e, left, width) => {
+    if (win.isDestroyed() || state.mode === 'compact') return;
+    const area = workAreaFor(win);
+    const cur = win.getBounds();
+    const w = Math.min(Math.max(Number(width) || 0, 260), area.width);
+    // Clamp x so a drag cannot push the panel off the side of the display.
+    const x = Math.min(Math.max(Math.round(Number(left) ?? cur.x), area.x),
+                       area.x + area.width - w);
+    const next = { x, y: cur.y, width: w, height: cur.height };
+    setBounds(next);
+    persist({ full: next });
+  });
+
   // The page reports the narrowest width at which no gauge label clips.
   ipcMain.on('widget:compact-min', (_e, width) => {
     const w = Number(width) || 0;
@@ -539,11 +562,17 @@ function createWindow() {
   }
   ipcMain.on('widget:open-settings', toggleSettings);
 
-  // Only shrink-wrap full mode on first run; compact height is fixed.
+  // Full mode shrink-wraps its content, every time the content changes, not
+  // just on first run: the user can no longer drag the height, so the window
+  // has to track it. Compact height is fixed.
   ipcMain.on('widget:autosize', (_e, height) => {
-    if (state.full || state.mode === 'compact' || win.isDestroyed()) return;
+    if (state.mode === 'compact' || win.isDestroyed()) return;
     const h = Math.max(160, Math.min(900, Number(height) || 0));
-    if (h) setBounds({ ...win.getBounds(), height: h });
+    const cur = win.getBounds();
+    if (!h || Math.abs(cur.height - h) <= 2) return; // ignore sub-pixel churn
+    const next = { ...cur, height: h };
+    setBounds(next);
+    persist({ full: next });
   });
 
   return win;

@@ -69,6 +69,7 @@
     height: 100%; background: var(--bg);
     border: 1px solid var(--line); border-radius: 14px;
     display: flex; flex-direction: column; overflow: hidden;
+    position: relative; /* anchors the width-drag edge handles */
   }
   body.compact .shell { display: none; }
 
@@ -193,8 +194,10 @@
   .switch.on .knob { transform: translateX(12px); background: #fff; }
   .switch.on + .swlabel, .swlabel.on { color: var(--accent); }
 
-  /* Grab zones for drag-resizing the strip. Frameless transparent windows are
-     unreliable to resize from the OS border, so the drag is handled in JS. */
+  /* Grab zones for drag-resizing. The window is deliberately not OS-resizable,
+     because that would put a meaningless ns-resize cursor on the top and bottom
+     edges. Width is dragged here instead, so ew-resize appears only where
+     resizing actually does something. */
   .edge {
     position: absolute; top: 0; bottom: 0; width: 7px;
     -webkit-app-region: no-drag; cursor: ew-resize; z-index: 5;
@@ -239,6 +242,8 @@
     <button class="icon" id="close" title="Close">&#215;</button>
   </header>
   <main id="out"></main>
+  <div class="edge l" id="edgeFL"></div>
+  <div class="edge r" id="edgeFR"></div>
 </div>
 
 <div class="strip">
@@ -662,22 +667,39 @@ function setMode(next) {
   render();
 }
 
-// Drag either strip edge to resize. Reported in screen coordinates so the
-// window moving mid-drag cannot feed back into the delta.
+// Drag either edge to resize WIDTH ONLY. Height is never user-draggable: the
+// strip has a fixed height and the panel shrink-wraps its content, so the
+// window is not OS-resizable and there is no vertical handle to grab.
+// Reported in screen coordinates so the window moving mid-drag cannot feed
+// back into the delta.
 function initEdgeResize() {
-  for (const id of ['edgeL', 'edgeR']) {
-    const el = document.getElementById(id);
+  const handles = [
+    { id: 'edgeL', right: false, full: false },
+    { id: 'edgeR', right: true,  full: false },
+    { id: 'edgeFL', right: false, full: true },
+    { id: 'edgeFR', right: true,  full: true },
+  ];
+  for (const h of handles) {
+    const el = document.getElementById(h.id);
     if (!el) continue;
     el.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      const right = id === 'edgeR';
       const startX = e.screenX;
       const startW = window.innerWidth;
+      const startLeft = window.screenX;
       const move = (ev) => {
-        // The strip stays centred, so dragging one edge moves both: a 1px pull
-        // on either side widens the window by 2px.
-        const dx = (ev.screenX - startX) * (right ? 1 : -1);
-        window.widget.compactResize(Math.round(startW + dx * 2));
+        const dx = ev.screenX - startX;
+        if (h.full) {
+          // The panel is free-floating: the right edge grows it in place, the
+          // left edge moves the window's left side and grows it the other way.
+          const width = h.right ? startW + dx : startW - dx;
+          const left = h.right ? startLeft : startLeft + dx;
+          window.widget.fullResize(Math.round(left), Math.round(width));
+        } else {
+          // The strip stays centred, so dragging one edge moves both: a 1px pull
+          // on either side widens the window by 2px.
+          window.widget.compactResize(Math.round(startW + dx * (h.right ? 2 : -2)));
+        }
       };
       const up = () => {
         window.removeEventListener('mousemove', move);
@@ -724,10 +746,11 @@ if (window.widget) {
 
   initEdgeResize();
 
-  // Shrink-wrap full mode around its content on first run only.
-  let sized = false;
-  const t = setInterval(() => {
-    if (sized) { clearInterval(t); return; }
+  // Keep full mode shrink-wrapped around its content. This runs continuously,
+  // not once: height is no longer draggable, so when a meter appears or
+  // disappears the window has to follow or the panel clips its own content.
+  let lastSent = 0;
+  setInterval(() => {
     if (mode !== 'full') return;
     const out = document.getElementById('out');
     const last = out.lastElementChild;
@@ -736,9 +759,9 @@ if (window.widget) {
     // the bottom of the final card instead, or the window can never shrink.
     const contentH = last.getBoundingClientRect().bottom - out.getBoundingClientRect().top;
     const pad = parseFloat(getComputedStyle(out).paddingBottom) || 0;
-    const h = document.querySelector('.shell header').offsetHeight + contentH + pad + 2;
-    if (h > 80) { sized = true; window.widget.autosize(Math.round(h)); }
-  }, 300);
+    const h = Math.round(document.querySelector('.shell header').offsetHeight + contentH + pad + 2);
+    if (h > 80 && Math.abs(h - lastSent) > 2) { lastSent = h; window.widget.autosize(h); }
+  }, 400);
 }
 
 // Settings live in their own dialog window (opened via the gear or the tray),
