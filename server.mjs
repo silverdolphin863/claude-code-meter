@@ -626,7 +626,19 @@ function codexSectionFromLogs() {
 }
 
 async function codexSection(forceLive = false) {
-  const live = await liveCodexSnapshot(forceLive);
+  // Never block the response on a cold live query. Spawning the Codex
+  // app-server takes seconds, and because this payload carries BOTH tools, an
+  // await here left the whole widget blank on startup, Claude included, for as
+  // long as Codex took to answer. Warm polls are ~3ms; only the first one was
+  // slow, which is exactly when the widget looks broken.
+  //
+  // So: a manual refresh still waits (the user asked, and the button shows a
+  // wait cursor), and a warm cache is used as before. A cold cache starts the
+  // query in the background and answers from the session logs right now; the
+  // live numbers land on the next poll a few seconds later.
+  const canWait = forceLive || codexLiveCache.snapshot;
+  const live = canWait ? await liveCodexSnapshot(forceLive) : null;
+  if (!canWait) liveCodexSnapshot(false); // fire and forget, it caches itself
   if (live) return codexSectionFromLive(live);
 
   const fallback = codexSectionFromLogs();
@@ -680,6 +692,11 @@ server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') console.log('port ' + PORT + ' already serving, reusing it');
   else throw e;
 });
-server.listen(PORT, () => console.log('usage widget on http://localhost:' + PORT));
+server.listen(PORT, () => {
+  console.log('usage widget on http://localhost:' + PORT);
+  // Start the Codex query while the window is still opening, so the live
+  // numbers are usually cached by the time the first poll arrives.
+  liveCodexSnapshot(false);
+});
 
 export { PORT };

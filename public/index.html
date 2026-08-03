@@ -532,7 +532,16 @@ function setText(id, text) {
 }
 
 function render() {
-  if (!data) return;
+  // Before the first poll lands there is nothing to draw, and an empty strip
+  // reads as "the app is broken" rather than "it is still starting". Say which.
+  if (!data) {
+    const msg = '<span class="empty">loading usage…</span>';
+    const items = document.getElementById('items');
+    const out = document.getElementById('out');
+    if (items && items.innerHTML !== msg) items.innerHTML = msg;
+    if (out && out.innerHTML !== msg) out.innerHTML = msg;
+    return;
+  }
   if (mode === 'compact') renderCompact(); else renderFull();
 
   // Freshness must describe the DATA, not my polling. Claude Code rewrites

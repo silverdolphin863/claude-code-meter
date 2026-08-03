@@ -149,10 +149,22 @@ try {
   assert.equal(claudeSection.installed, true);
   assert.equal(claudeSection.limits[0].percent, 12);
   assert.equal(codexSection.installed, true);
-  assert.equal(codexSection.source, 'live');
-  assert.deepEqual(codexSection.limits.map((limit) => limit.percent), [6]);
-  assert.deepEqual(codexSection.limits.map((limit) => limit.window_hours), [168]);
-  assert.equal(codexSection.limits[0].resets_at, new Date(liveCodexReset * 1000).toISOString());
+  // The first poll must NOT wait for the live Codex query: a cold app-server
+  // spawn took long enough that the whole widget, Claude included, sat blank
+  // until it answered. So the opening response may legitimately come from the
+  // session logs. The live numbers must then arrive on a following poll.
+  let liveCodex = codexSection.source === 'live' ? codexSection : null;
+  const liveDeadline = Date.now() + 5000;
+  while (!liveCodex && Date.now() < liveDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const next = await (await fetch(`http://127.0.0.1:${port}/usage.json`)).json();
+    const section = next.sections.find((s) => s.id === 'codex');
+    if (section.source === 'live') liveCodex = section;
+  }
+  assert(liveCodex, 'live Codex snapshot never replaced the session-log fallback');
+  assert.deepEqual(liveCodex.limits.map((limit) => limit.percent), [6]);
+  assert.deepEqual(liveCodex.limits.map((limit) => limit.window_hours), [168]);
+  assert.equal(liveCodex.limits[0].resets_at, new Date(liveCodexReset * 1000).toISOString());
   const manual = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
   assert.equal(manual.status, 200);
   const expired = (await manual.json()).sections.find((section) => section.id === 'claude');
