@@ -71,16 +71,31 @@ async function launchClaudeLogin() {
   const claude = findExecutable('claude');
   if (!claude) return { ok: false, error: 'Claude CLI not found' };
 
-  if (process.platform === 'win32') {
-    const terminal = findExecutable('wt');
-    if (!terminal) return { ok: false, error: 'Windows Terminal not found' };
-    return spawnDetached(terminal, [
-      'new-tab', '--title', 'CC Meter - Claude Login',
-      claude, 'auth', 'login', '--claudeai',
-    ]);
+  if (process.platform !== 'win32') {
+    return spawnDetached(claude, ['auth', 'login', '--claudeai']);
   }
 
-  return spawnDetached(claude, ['auth', 'login', '--claudeai']);
+  // Windows Terminal is an App Execution Alias: a zero-byte APPEXECLINK
+  // reparse point under WindowsApps. Node's fs reports ENOENT for it even
+  // though it is on PATH and spawns perfectly, so looking for the file said
+  // "Windows Terminal not found" on machines that plainly have it. Try to
+  // launch instead of trying to find, and fall through to shells that are
+  // always present. A visible window is the point here: the login is
+  // interactive and the user has to complete it.
+  const attempts = [
+    ['wt', ['new-tab', '--title', 'CC Meter - Claude Login',
+            claude, 'auth', 'login', '--claudeai']],
+    ['powershell.exe', ['-NoExit', '-Command', `& '${claude}' auth login --claudeai`]],
+    ['cmd.exe', ['/k', claude, 'auth', 'login', '--claudeai']],
+  ];
+
+  let lastError = 'could not open a terminal';
+  for (const [command, args] of attempts) {
+    const result = await spawnDetached(command, args);
+    if (result.ok) return result;
+    lastError = result.error || lastError;
+  }
+  return { ok: false, error: lastError };
 }
 
 ipcMain.handle('widget:reauth-claude', launchClaudeLogin);
