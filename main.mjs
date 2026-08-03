@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PORT } from './server.mjs'; // importing starts the local HTTP server
 import { constrainCompactBounds } from './window-geometry.mjs';
+import { checkForUpdates } from './updater.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -420,6 +421,9 @@ function createWindow() {
         click: (m) => win.setAlwaysOnTop(m.checked, 'floating') },
       { type: 'separator' },
       { label: 'Settings...', click: () => openSettings() },
+      // The ONLY entry point to the updater. Nothing checks on launch, on
+      // focus, or on a timer, by design: see updater.mjs.
+      { label: 'Check for updates...', click: () => checkForUpdates(win) },
       { label: 'Quit CC Meter', click: () => { quitting = true; app.quit(); } },
     ]));
   }

@@ -52,6 +52,14 @@ rather not trust a binary from a stranger on the internet, build it yourself
 from the source below. That is the honest answer and it is why the source is
 here.
 
+## Updates
+
+The tray menu has **Check for updates...**, and that is the only thing that
+ever contacts the releases feed. CC Meter does not check on launch, on focus,
+or on a timer, never downloads an update without you choosing to, and never
+installs one in the background. If you decline, nothing is staged for the next
+restart.
+
 ## Where the numbers come from
 
 CC Meter has no hosted service. It makes the Claude usage request to Anthropic
@@ -116,7 +124,9 @@ and the screen-edge dock are Windows-shaped.
 - Live Codex readings require a Codex CLI version that exposes
   `account/rateLimits/read`. Older versions use the filtered session-log
   fallback and update only when Codex writes a session file.
-- No auto-update. Watch the releases page.
+- Updates are checked only when you ask. The tray menu has
+  **Check for updates...**; nothing checks, downloads, or installs on its own,
+  and there is no launch-time nag.
 
 ## License
 
