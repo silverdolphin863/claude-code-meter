@@ -1,5 +1,9 @@
 node_modules/
 dist/
+.pio/
+*.obj
+__pycache__/
+*.pyc
 *.log
 .ccmeter-refresh.json
 

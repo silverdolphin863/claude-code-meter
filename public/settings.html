@@ -60,6 +60,26 @@
   }
   .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .btn:disabled { opacity: 0.5; cursor: default; }
+  .panelbox {
+    margin-top: 6px; padding: 9px 10px; border: 1px solid var(--line);
+    border-radius: 9px; background: var(--card);
+  }
+  .panelstate { font-size: 11.5px; color: var(--muted); margin-bottom: 7px; }
+  .panelstate.good { color: #3ddc84; }
+  .panelstate.bad { color: #ff9f45; }
+  .field { display: grid; grid-template-columns: 62px 1fr; gap: 7px; margin-top: 5px; }
+  .field span { color: var(--dim); font-size: 10.5px; }
+  .field code {
+    color: var(--ink); font: 10.5px/1.35 Consolas, monospace;
+    overflow-wrap: anywhere; user-select: text;
+  }
+  .panelactions { display: flex; justify-content: flex-end; margin-top: 8px; }
+  select {
+    margin-left: auto; min-width: 120px; padding: 4px 7px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    font: inherit;
+  }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -79,6 +99,24 @@
   <label><input type="checkbox" id="ah"> Auto-hide the strip until hovered</label>
   <label><input type="checkbox" id="rt"> Show reset time in the strip</label>
 
+  <h2>Hardware display</h2>
+  <label><input type="checkbox" id="panelEnabled"> Enable ESP32 display</label>
+  <label><input type="checkbox" id="panelOnly"> Hide the desktop widget</label>
+  <label>Connection
+    <select id="panelTransport"><option value="usb">USB cable</option><option value="wifi">Local Wi-Fi</option></select>
+  </label>
+  <div class="panelbox">
+    <div class="panelstate" id="panelState">Disabled</div>
+    <div id="usbDetails"><div class="field"><span>Port</span><code id="panelSerialPort">detect automatically</code></div></div>
+    <div id="wifiDetails" class="hidden">
+      <div class="field"><span>Address</span><code id="panelEndpoint">not available</code></div>
+      <div class="field"><span>Access key</span><code id="panelToken">not generated</code></div>
+      <div class="panelactions"><button id="copyPanel" class="btn">Copy setup</button></div>
+    </div>
+  </div>
+  <p class="hint">USB is plug-and-play and carries power plus live usage. Local
+  Wi-Fi is available as an access-key-protected alternative.</p>
+
   <h2>Claude account</h2>
   <div class="acct">
     <span id="authState">checking...</span>
@@ -93,6 +131,7 @@
 <script>
 let prefs = { claude: 'auto', codex: 'auto', showReset: true };
 let sections = [];
+let panel = { config: { enabled: false, displayOnly: false, token: '' }, endpoints: [], status: {} };
 
 function visible(id) {
   const p = prefs[id];
@@ -110,11 +149,65 @@ function paint() {
   }
 }
 
+function ageText(iso) {
+  const age = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(age) || age < 0) return 'just now';
+  if (age < 60000) return 'under 1m ago';
+  if (age < 3600000) return Math.floor(age / 60000) + 'm ago';
+  return Math.floor(age / 3600000) + 'h ago';
+}
+
+function paintPanel() {
+  const config = panel.config || {};
+  const status = panel.status || {};
+  document.getElementById('panelEnabled').checked = Boolean(config.enabled);
+  document.getElementById('panelOnly').checked = Boolean(config.displayOnly);
+  document.getElementById('panelOnly').disabled = !config.enabled;
+  document.getElementById('panelTransport').value = config.transport === 'wifi' ? 'wifi' : 'usb';
+  document.getElementById('panelTransport').disabled = config.enabled;
+  const usb = config.transport !== 'wifi';
+  document.getElementById('usbDetails').classList.toggle('hidden', !usb);
+  document.getElementById('wifiDetails').classList.toggle('hidden', usb);
+  document.getElementById('panelSerialPort').textContent = status.serialPort || 'detect automatically';
+  document.getElementById('panelEndpoint').textContent = panel.endpoints?.[0] || 'not available';
+  document.getElementById('panelToken').textContent = config.token || 'not generated';
+  document.getElementById('copyPanel').disabled = !panel.endpoints?.[0] || !config.token;
+
+  const state = document.getElementById('panelState');
+  if (!config.enabled) {
+    state.textContent = 'Disabled';
+    state.className = 'panelstate';
+  } else if (status.error) {
+    state.textContent = 'Could not start: ' + status.error;
+    state.className = 'panelstate bad';
+  } else if (usb && status.connected && status.deviceSeen) {
+    state.textContent = 'Display connected on ' + (status.serialPort || 'USB');
+    state.className = 'panelstate good';
+  } else if (usb && status.connected) {
+    state.textContent = 'USB open, waiting for CC Meter firmware';
+    state.className = 'panelstate';
+  } else if (usb) {
+    state.textContent = 'Searching for the USB display';
+    state.className = 'panelstate';
+  } else if (!status.listening) {
+    state.textContent = 'Starting...';
+    state.className = 'panelstate';
+  } else if (status.lastSeen) {
+    state.textContent = 'Display connected ' + ageText(status.lastSeen);
+    state.className = 'panelstate good';
+  } else {
+    state.textContent = 'Ready, waiting for the display';
+    state.className = 'panelstate good';
+  }
+}
+
 window.widget.onState((s) => {
   prefs = { claude: 'auto', codex: 'auto', showReset: true, ...(s.prefs || {}) };
+  panel = s.panel || panel;
   document.getElementById('ah').checked = Boolean(s.autohide);
   document.getElementById('rt').checked = prefs.showReset !== false;
   paint();
+  paintPanel();
 });
 
 // The strip's only signal that the Claude login died is the refresh button
@@ -154,6 +247,16 @@ async function loadUsage() {
 loadUsage();
 setInterval(loadUsage, 5000); // reflects a completed login without reopening
 
+async function loadPanelStatus() {
+  if (!window.widget?.getPanelStatus) return;
+  try {
+    panel = await window.widget.getPanelStatus();
+    paintPanel();
+  } catch { /* retain the last known state */ }
+}
+loadPanelStatus();
+setInterval(loadPanelStatus, 2000);
+
 document.getElementById('reauth').onclick = async () => {
   if (!window.widget?.reauthClaude) return;
   reconnecting = true;
@@ -181,6 +284,32 @@ document.getElementById('ah').onchange = (e) => window.widget.setAutohide(e.targ
 document.getElementById('rt').onchange = (e) => {
   prefs.showReset = e.target.checked;
   window.widget.setPrefs(prefs);
+};
+document.getElementById('panelEnabled').onchange = async (e) => {
+  panel = await window.widget.setPanel({ enabled: e.target.checked });
+  paintPanel();
+};
+document.getElementById('panelOnly').onchange = async (e) => {
+  panel = await window.widget.setPanel({ displayOnly: e.target.checked });
+  paintPanel();
+};
+document.getElementById('panelTransport').onchange = async (e) => {
+  panel = await window.widget.setPanel({ transport: e.target.value });
+  paintPanel();
+};
+document.getElementById('copyPanel').onclick = async () => {
+  const button = document.getElementById('copyPanel');
+  const text = JSON.stringify({
+    base_url: panel.endpoints?.[0] || '',
+    token: panel.config?.token || '',
+  });
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = 'Copied';
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => { button.textContent = 'Copy setup'; }, 1500);
 };
 document.getElementById('close').onclick = () => window.close();
 </script>

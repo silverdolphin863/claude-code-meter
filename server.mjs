@@ -5,6 +5,7 @@
 //   Codex limits   -> installed Codex app-server account/rateLimits/read
 //   Codex fallback -> newest ~/.codex/sessions/**/*.jsonl (last token_count event)
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -35,6 +36,18 @@ try {
 } catch { /* a missing package manifest must not prevent the meter from starting */ }
 const PORT = Number(process.env.PORT || 7373);
 const CORS_ORIGIN = process.env.CCMETER_CORS_ORIGIN || '';
+const DEFAULT_PANEL_PORT = Number(process.env.CCMETER_PANEL_PORT || 7374);
+
+let panelServer = null;
+let panelState = {
+  enabled: false,
+  listening: false,
+  port: DEFAULT_PANEL_PORT,
+  token: '',
+  error: null,
+  lastSeen: null,
+  lastAddress: null,
+};
 
 // Scanning ~50k session files is slow, so the newest-file lookup is cached.
 const SCAN_TTL_MS = 30_000;
@@ -676,6 +689,175 @@ async function payload(forceCodex = false) {
   };
 }
 
+function safeTokenEqual(expected, supplied) {
+  if (!expected || !supplied) return false;
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length && crypto.timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
+function getPanelServerStatus() {
+  return {
+    enabled: panelState.enabled,
+    listening: panelState.listening,
+    port: panelState.port,
+    error: panelState.error,
+    lastSeen: panelState.lastSeen,
+    lastAddress: panelState.lastAddress,
+  };
+}
+
+function panelResetLabel(resetIso) {
+  if (!resetIso) return '';
+  const date = new Date(resetIso);
+  if (!Number.isFinite(date.getTime())) return '';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const now = new Date();
+  const sameDay = date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  if (sameDay) return `TODAY ${hours}:${minutes}`;
+  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  return `${days[date.getDay()]} ${hours}:${minutes}`;
+}
+
+function panelPayload(data) {
+  return {
+    schema: 1,
+    server_time_ms: Date.now(),
+    ...data,
+    sections: data.sections.map((section) => ({
+      ...section,
+      limits: section.limits.map((limit) => ({
+        ...limit,
+        resets_at_ms: Number.isFinite(Date.parse(limit.resets_at))
+          ? Date.parse(limit.resets_at)
+          : null,
+        reset_label: panelResetLabel(limit.resets_at),
+      })),
+    })),
+  };
+}
+
+async function getPanelUsage(manual = false) {
+  if (manual) await refreshClaudeUsage(true);
+  else refreshClaudeUsage();
+  return panelPayload(await payload(manual));
+}
+
+async function handlePanelRequest(req, res) {
+  const url = new URL(req.url, 'http://panel.local');
+  if (req.method !== 'GET') {
+    res.writeHead(405, { Allow: 'GET', Connection: 'close' });
+    return res.end('method not allowed');
+  }
+  if (url.pathname !== '/panel/v1/usage') {
+    res.writeHead(404, { Connection: 'close' });
+    return res.end('not found');
+  }
+
+  const authorization = String(req.headers.authorization || '');
+  const supplied = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!safeTokenEqual(panelState.token, supplied)) {
+    res.writeHead(401, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+    });
+    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
+
+  panelState.lastSeen = new Date().toISOString();
+  panelState.lastAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || null;
+  const manual = url.searchParams.get('refresh') === '1';
+
+  try {
+    const body = JSON.stringify(await getPanelUsage(manual));
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+      'X-CCMeter-Schema': '1',
+    });
+    return res.end(body);
+  } catch {
+    res.writeHead(500, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+    });
+    return res.end(JSON.stringify({ error: 'usage unavailable' }));
+  }
+}
+
+async function stopPanelServer() {
+  const active = panelServer;
+  panelServer = null;
+  panelState.listening = false;
+  if (!active) return;
+  active.closeAllConnections?.();
+  await new Promise((resolve) => active.close(() => resolve()));
+}
+
+async function configurePanelServer(options = {}) {
+  const enabled = Boolean(options.enabled);
+  const token = typeof options.token === 'string' ? options.token.trim() : '';
+  const requestedPort = Number(options.port || DEFAULT_PANEL_PORT);
+  const port = Number.isInteger(requestedPort) && requestedPort >= 1024 && requestedPort <= 65535
+    ? requestedPort
+    : DEFAULT_PANEL_PORT;
+
+  if (enabled && panelServer && panelState.listening &&
+      panelState.port === port && panelState.token === token) {
+    return getPanelServerStatus();
+  }
+
+  await stopPanelServer();
+  panelState = {
+    enabled,
+    listening: false,
+    port,
+    token,
+    error: null,
+    lastSeen: null,
+    lastAddress: null,
+  };
+  if (!enabled) return getPanelServerStatus();
+  if (token.length < 16 || token.length > 256) {
+    panelState.error = 'invalid panel access key';
+    return getPanelServerStatus();
+  }
+
+  const instance = http.createServer((req, res) => {
+    handlePanelRequest(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500, { Connection: 'close' });
+      res.end();
+    });
+  });
+  const started = await new Promise((resolve) => {
+    const onError = (error) => resolve({ ok: false, error });
+    instance.once('error', onError);
+    instance.listen(port, '0.0.0.0', () => {
+      instance.off('error', onError);
+      resolve({ ok: true });
+    });
+  });
+  if (!started.ok) {
+    panelState.error = String(started.error?.code || started.error?.message || 'could not listen');
+    try { instance.close(); } catch { /* nothing to close */ }
+    return getPanelServerStatus();
+  }
+
+  panelServer = instance;
+  panelState.listening = true;
+  instance.on('error', (error) => {
+    panelState.error = String(error.code || error.message || 'panel server error');
+    panelState.listening = false;
+  });
+  console.log('hardware display endpoint on port ' + port);
+  return getPanelServerStatus();
+}
+
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript' };
 
 const server = http.createServer(async (req, res) => {
@@ -728,4 +910,12 @@ server.listen(PORT, HOST, () => {
   liveCodexSnapshot(false);
 });
 
-export { PORT };
+if (process.env.CCMETER_PANEL_TOKEN) {
+  configurePanelServer({
+    enabled: true,
+    token: process.env.CCMETER_PANEL_TOKEN,
+    port: DEFAULT_PANEL_PORT,
+  }).catch(() => {});
+}
+
+export { PORT, configurePanelServer, getPanelServerStatus, getPanelUsage };

@@ -1,13 +1,25 @@
 import { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } from 'electron';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { PORT } from './server.mjs'; // importing starts the local HTTP server
+import { PORT, configurePanelServer, getPanelServerStatus, getPanelUsage } from './server.mjs';
+import { HardwareDisplayController } from './hardware-display.mjs';
 import { constrainCompactBounds } from './window-geometry.mjs';
 import { checkForUpdates } from './updater.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+const HARDWARE_BRIDGE = app.isPackaged
+  ? path.join(process.resourcesPath, 'hardware-display-bridge.ps1')
+  : path.join(DIR, 'scripts', 'hardware-display-bridge.ps1');
+let publishHardwareState = () => {};
+const hardwareDisplay = new HardwareDisplayController({
+  bridgePath: HARDWARE_BRIDGE,
+  loadUsage: getPanelUsage,
+  onChange: () => publishHardwareState(),
+});
 
 // Pin the app name BEFORE resolving userData. Otherwise the dev run uses the
 // package `name` and the packaged build uses `productName`, so they read two
@@ -115,6 +127,69 @@ let quitting = false;
 function persist(patch) {
   state = { ...state, ...patch };
   try { fs.writeFileSync(STATE, JSON.stringify(state)); } catch { /* best effort */ }
+}
+
+function normalizePanelConfig(value) {
+  const candidate = value && typeof value === 'object' ? value : {};
+  const requestedPort = Number(candidate.port);
+  return {
+    enabled: Boolean(candidate.enabled),
+    displayOnly: Boolean(candidate.displayOnly),
+    transport: candidate.transport === 'wifi' ? 'wifi' : 'usb',
+    serialPort: typeof candidate.serialPort === 'string' && /^(auto|COM\d+)$/i.test(candidate.serialPort)
+      ? candidate.serialPort
+      : 'auto',
+    port: Number.isInteger(requestedPort) && requestedPort >= 1024 && requestedPort <= 65535
+      ? requestedPort
+      : 7374,
+    token: typeof candidate.token === 'string' && candidate.token.length >= 16
+      ? candidate.token
+      : crypto.randomBytes(18).toString('base64url'),
+  };
+}
+
+const normalPanel = normalizePanelConfig(state.panel);
+if (JSON.stringify(normalPanel) !== JSON.stringify(state.panel || {})) {
+  persist({ panel: normalPanel });
+}
+
+function lanIPv4Addresses() {
+  const rows = [];
+  for (const [name, addresses] of Object.entries(os.networkInterfaces())) {
+    if (/loopback|vethernet|virtualbox|vmware|tailscale/i.test(name)) continue;
+    for (const address of addresses || []) {
+      if (address.family !== 'IPv4' || address.internal || address.address.startsWith('169.254.')) continue;
+      rows.push({ name, address: address.address });
+    }
+  }
+  rows.sort((a, b) => {
+    const rank = (name) => /wi-?fi|wlan/i.test(name) ? 0 : /ethernet/i.test(name) ? 1 : 2;
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
+  return [...new Set(rows.map((row) => row.address))];
+}
+
+function hardwareDisplayState() {
+  const config = normalizePanelConfig(state.panel);
+  const endpoints = lanIPv4Addresses().map((address) => `http://${address}:${config.port}`);
+  return {
+    config,
+    endpoints,
+    status: config.transport === 'usb' ? hardwareDisplay.status() : getPanelServerStatus(),
+  };
+}
+
+async function configureHardwareDisplay() {
+  const config = normalizePanelConfig(state.panel);
+  await configurePanelServer({
+    ...config,
+    enabled: config.enabled && config.transport === 'wifi' && !process.env.WIDGET_CAPTURE,
+  });
+  await hardwareDisplay.configure({
+    ...config,
+    enabled: config.enabled && config.transport === 'usb' && !process.env.WIDGET_CAPTURE,
+  });
+  return hardwareDisplayState();
 }
 
 const workAreaFor = (win) => screen.getDisplayNearestPoint(win.getBounds()).workArea;
@@ -316,6 +391,7 @@ function createWindow() {
       mode: state.mode === 'compact' ? 'compact' : 'full',
       autohide: Boolean(state.autohide),
       prefs: state.prefs || null,
+      panel: hardwareDisplayState(),
     };
     win.webContents.send('widget:set-state', payload);
     if (settingsWin && !settingsWin.isDestroyed()) {
@@ -323,6 +399,7 @@ function createWindow() {
     }
     buildTrayMenu();
   };
+  publishHardwareState = pushState;
 
   function setMode(mode) {
     if (win.isDestroyed()) return;
@@ -436,6 +513,24 @@ function createWindow() {
         checked: (state.prefs?.codex ?? 'auto') !== 'off',
         click: (m) => { persist({ prefs: { ...state.prefs, codex: m.checked ? 'auto' : 'off' } }); pushState(); } },
       { type: 'separator' },
+      { label: 'ESP32 hardware display', type: 'checkbox',
+        checked: Boolean(state.panel?.enabled),
+        click: async (m) => {
+          persist({ panel: normalizePanelConfig({ ...state.panel, enabled: m.checked }) });
+          await configureHardwareDisplay();
+          if (m.checked && state.panel?.displayOnly) concealWidget();
+          else if (!m.checked) presentWidget();
+          pushState();
+        } },
+      { label: 'Hide desktop widget when hardware display is enabled', type: 'checkbox',
+        enabled: Boolean(state.panel?.enabled),
+        checked: Boolean(state.panel?.displayOnly),
+        click: async (m) => {
+          persist({ panel: normalizePanelConfig({ ...state.panel, displayOnly: m.checked }) });
+          if (m.checked) concealWidget(); else presentWidget();
+          pushState();
+        } },
+      { type: 'separator' },
       { label: 'Auto-hide (slide away until hovered)', type: 'checkbox',
         enabled: state.mode === 'compact',
         checked: Boolean(state.autohide), click: (m) => setAutohide(m.checked) },
@@ -476,6 +571,10 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     if (state.mode === 'compact') setBounds(compactBounds(win));
     pushState();
+    if (state.panel?.enabled && state.panel?.displayOnly && !process.env.WIDGET_CAPTURE) {
+      concealWidget();
+      return;
+    }
     if (state.mode === 'compact' && state.autohide) { startWatch(); conceal(1500); }
   });
 
@@ -492,6 +591,36 @@ function createWindow() {
     // pushState, not just buildTrayMenu: the strip renders from these prefs
     // (meter visibility, reset-time chip) and must repaint on the same click.
     if (prefs && typeof prefs === 'object') { persist({ prefs }); pushState(); }
+  });
+  ipcMain.handle('widget:get-panel-status', () => hardwareDisplayState());
+  ipcMain.handle('widget:set-panel', async (_e, patch) => {
+    const current = normalizePanelConfig(state.panel);
+    const safePatch = patch && typeof patch === 'object' ? patch : {};
+    const next = normalizePanelConfig({
+      ...current,
+      ...(typeof safePatch.enabled === 'boolean' ? { enabled: safePatch.enabled } : {}),
+      ...(typeof safePatch.displayOnly === 'boolean' ? { displayOnly: safePatch.displayOnly } : {}),
+      ...(safePatch.transport === 'usb' || safePatch.transport === 'wifi'
+        ? { transport: safePatch.transport }
+        : {}),
+      ...(typeof safePatch.serialPort === 'string' ? { serialPort: safePatch.serialPort } : {}),
+      ...(Number.isInteger(Number(safePatch.port)) ? { port: Number(safePatch.port) } : {}),
+    });
+    persist({ panel: next });
+    await configureHardwareDisplay();
+    if (next.enabled && next.displayOnly) concealWidget();
+    else if (!next.enabled || (current.displayOnly && !next.displayOnly)) presentWidget();
+    pushState();
+    return hardwareDisplayState();
+  });
+  ipcMain.handle('widget:rotate-panel-token', async () => {
+    persist({ panel: normalizePanelConfig({
+      ...state.panel,
+      token: crypto.randomBytes(18).toString('base64url'),
+    }) });
+    await configureHardwareDisplay();
+    pushState();
+    return hardwareDisplayState();
   });
 
   // Explicit drag-resize from the strip's edge handles.
@@ -558,9 +687,9 @@ function createWindow() {
     panelOpen = true;
     const area = workAreaFor(win);
     settingsWin = new BrowserWindow({
-      width: 280,
-      height: 396,
-      x: Math.round(area.x + area.width - 300),
+      width: 340,
+      height: Math.min(720, area.height - 60),
+      x: Math.round(area.x + area.width - 360),
       y: area.y + 40,
       frame: false,
       transparent: true,
@@ -578,6 +707,7 @@ function createWindow() {
           mode: state.mode === 'compact' ? 'compact' : 'full',
           autohide: Boolean(state.autohide),
           prefs: state.prefs || null,
+          panel: hardwareDisplayState(),
         });
       }
     });
@@ -618,6 +748,7 @@ if (!process.env.WIDGET_CAPTURE && !app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  await configureHardwareDisplay();
   const win = createWindow();
   mainWindow = win;
   if (process.env.WIDGET_CAPTURE) {
@@ -677,6 +808,9 @@ app.whenReady().then(async () => {
   win.loadURL(`http://localhost:${PORT}/`);
 });
 
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => {
+  quitting = true;
+  hardwareDisplay.stop();
+});
 // The window hides to the tray instead of closing, so do not quit with it.
 app.on('window-all-closed', () => { if (quitting) app.quit(); });

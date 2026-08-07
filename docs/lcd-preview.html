@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CC Meter LCD preview</title>
+  <style>
+    :root {
+      --bg: #14131a;
+      --card: #1e1c27;
+      --line: #2f2c3b;
+      --ink: #f4f2f9;
+      --muted: #8b85a0;
+      --dim: #625c78;
+      --track: #262332;
+      --track-tex: #333041;
+      --ok: #39d98a;
+      --warn: #ffca3b;
+      --hot: #ff5b5b;
+      --accent: #a78bfa;
+      --badge: #302d39;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      min-width: 480px;
+      min-height: 480px;
+      margin: 0;
+      background: #0b0a0f;
+    }
+
+    body {
+      display: grid;
+      place-items: start center;
+    }
+
+    .lcd {
+      width: 480px;
+      height: 480px;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: geometricPrecision;
+    }
+
+    header {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 17px;
+    }
+
+    h1 {
+      flex: 1;
+      margin: 0;
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: -0.035em;
+    }
+
+    .connection {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .freshness {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 9px #39d98a66;
+    }
+
+    .transport {
+      color: var(--ok);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .header-icon {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+
+    .header-icon svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.8;
+    }
+
+    main {
+      height: 426px;
+      padding: 0 14px 12px;
+    }
+
+    .card {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+    }
+
+    .card.claude { height: 294px; }
+    .card.codex { height: 112px; margin-top: 8px; }
+
+    .provider {
+      height: 22px;
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .plan {
+      color: var(--accent);
+      font-size: 9px;
+      letter-spacing: 0.04em;
+    }
+
+    .meter-row {
+      height: 80px;
+      padding-top: 2px;
+    }
+
+    .meter-row + .meter-row { margin-top: 2px; }
+    .codex .meter-row { height: 70px; }
+
+    .metric-head {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pace {
+      min-width: 54px;
+      padding: 3px 7px 2px;
+      border-radius: 6px;
+      background: var(--badge);
+      color: var(--ok);
+      font-size: 15px;
+      line-height: 1;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .pace.warn { color: var(--warn); }
+
+    .percent {
+      width: 50px;
+      color: var(--ok);
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .percent.warn { color: var(--warn); }
+
+    .track {
+      position: relative;
+      height: 12px;
+      margin-top: 2px;
+      overflow: hidden;
+      border-radius: 6px;
+      background:
+        repeating-linear-gradient(135deg, transparent 0 6px, var(--track-tex) 6px 8px),
+        var(--track);
+    }
+
+    .fill {
+      width: var(--percent);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--ok);
+    }
+
+    .fill.warn { background: var(--warn); }
+
+    .reset {
+      height: 20px;
+      margin-top: 7px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .clock {
+      width: 12px;
+      height: 12px;
+      flex: none;
+      fill: none;
+      stroke: var(--dim);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.7;
+    }
+
+    .countdown {
+      color: #b8b2c8;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .reset-target {
+      margin-left: auto;
+      color: var(--dim);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <section class="lcd" aria-label="Proposed 480 by 480 CC Meter LCD interface">
+    <header>
+      <h1>CC Meter</h1>
+      <span class="connection">
+        <span class="freshness">2m</span>
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="transport">USB</span>
+      </span>
+      <span class="header-icon" aria-label="Refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"></path>
+          <path d="M3 3v5h5"></path>
+          <path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"></path>
+          <path d="M16 16h5v5"></path>
+        </svg>
+      </span>
+      <span class="header-icon" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5 7 7M17 17l1.5 1.5M18.5 5.5 17 7M7 17l-1.5 1.5"></path>
+        </svg>
+      </span>
+    </header>
+
+    <main>
+      <section class="card claude">
+        <div class="provider">Claude Code</div>
+
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">5-hour</span>
+            <span class="percent">33%</span>
+            <span class="pace">0.5x</span>
+          </div>
+          <div class="track"><div class="fill" style="--percent: 33%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">2h 53m</span>
+            <span class="reset-target">TODAY 17:30</span>
+          </div>
+        </div>
+
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">Weekly</span>
+            <span class="percent">36%</span>
+            <span class="pace">0.6x</span>
+          </div>
+          <div class="track"><div class="fill" style="--percent: 36%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">3d 2h</span>
+            <span class="reset-target">MON 17:00</span>
+          </div>
+        </div>
+
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">Weekly, Fable</span>
+            <span class="percent warn">53%</span>
+            <span class="pace warn">0.9x</span>
+          </div>
+          <div class="track"><div class="fill warn" style="--percent: 53%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">3d 2h</span>
+            <span class="reset-target">MON 17:00</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card codex">
+        <div class="provider">Codex <span class="plan">PRO</span></div>
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">Weekly</span>
+            <span class="percent">32%</span>
+            <span class="pace warn">1.1x</span>
+          </div>
+          <div class="track"><div class="fill" style="--percent: 32%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">4d 20h</span>
+            <span class="reset-target">WED 13:18</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </section>
+</body>
+</html>

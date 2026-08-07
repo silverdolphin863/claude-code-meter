@@ -5,6 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { constrainCompactBounds } from './window-geometry.mjs';
+import { encodeHardwareUsage, parseHardwareMessage } from './hardware-display.mjs';
 
 const workArea = { x: 100, y: 40, width: 1920, height: 1040 };
 assert.deepEqual(
@@ -20,6 +21,22 @@ assert.deepEqual(
   { x: 120, y: 40, width: 1900, height: 29 },
 );
 console.log('compact geometry: PASS');
+
+assert.deepEqual(parseHardwareMessage('{"type":"ack"}'), { type: 'ack' });
+assert.equal(parseHardwareMessage('not json'), null);
+assert.equal(encodeHardwareUsage({ schema: 1 }), '{"type":"usage","data":{"schema":1}}');
+const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
+assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
+assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
+const firmwareMainSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/main.cpp', import.meta.url), 'utf8');
+assert.match(firmwareMainSource, /Serial\.setRxBufferSize\(kSerialRxBufferBytes\)/,
+  'firmware must enlarge its UART receive buffer before starting serial');
+assert.match(firmwareMainSource, /x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight/,
+  'refresh touch handling must use the same shared geometry as the drawn icon');
+const firmwareUiSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.cpp', import.meta.url), 'utf8');
+assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
+  'refresh rendering must use the shared touch-aligned icon position');
+console.log('hardware display protocol: PASS');
 
 // v1.0.6 shipped a package whose asar was missing updater.mjs, because
 // build.files is a whitelist and the new module was never added to it. The app
@@ -49,6 +66,8 @@ console.log('compact geometry: PASS');
     }
   }
   assert.ok(seen.has('updater.mjs'), 'expected updater.mjs in the import graph');
+  const bridge = pkg.build.extraResources?.find((item) => item.to === 'hardware-display-bridge.ps1');
+  assert.equal(bridge?.from, 'scripts/hardware-display-bridge.ps1', 'USB bridge must be copied outside app.asar');
   console.log(`packaged imports (${seen.size} modules): PASS`);
 }
 
@@ -101,6 +120,8 @@ input.on('line', (line) => {
 `);
 const port = 17373 + Math.floor(Math.random() * 1000);
 const mockPort = 19373 + Math.floor(Math.random() * 1000);
+const panelPort = 21373 + Math.floor(Math.random() * 1000);
+const panelToken = 'test-panel-token-0123456789';
 let mockAuthorized = false;
 let mockRequests = 0;
 const mockUsageApi = http.createServer((_req, res) => {
@@ -130,6 +151,8 @@ const child = spawn(process.execPath, ['server.mjs'], {
     CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
     CCMETER_CODEX_COMMAND: process.execPath,
     CCMETER_CODEX_COMMAND_ARGS: JSON.stringify([fakeCodex]),
+    CCMETER_PANEL_PORT: String(panelPort),
+    CCMETER_PANEL_TOKEN: panelToken,
     PORT: String(port),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -155,6 +178,40 @@ try {
   assert.equal(claudeSection.limits[0].percent, 12);
   assert.equal(claudeSection.limits.length, 1, 'an already-reset Claude window must be dropped, not shown with stale numbers');
   assert.equal(codexSection.installed, true);
+
+  let panelUnauthorized;
+  const panelDeadline = Date.now() + 5000;
+  while (!panelUnauthorized && Date.now() < panelDeadline) {
+    try { panelUnauthorized = await fetch(`http://127.0.0.1:${panelPort}/panel/v1/usage`); }
+    catch { await new Promise((resolve) => setTimeout(resolve, 100)); }
+  }
+  assert(panelUnauthorized, 'hardware display endpoint did not start');
+  assert.equal(panelUnauthorized.status, 401);
+  const wrongPanelKey = await fetch(`http://127.0.0.1:${panelPort}/panel/v1/usage`, {
+    headers: { Authorization: 'Bearer definitely-the-wrong-key' },
+  });
+  assert.equal(wrongPanelKey.status, 401);
+  const unicodePanelKey = await fetch(`http://127.0.0.1:${panelPort}/panel/v1/usage`, {
+    headers: { Authorization: `Bearer ${'é'.repeat(panelToken.length)}` },
+  });
+  assert.equal(unicodePanelKey.status, 401, 'equal character counts with different byte lengths must not throw');
+  const panelResponse = await fetch(`http://127.0.0.1:${panelPort}/panel/v1/usage`, {
+    headers: { Authorization: `Bearer ${panelToken}` },
+  });
+  assert.equal(panelResponse.status, 200);
+  assert.equal(panelResponse.headers.get('access-control-allow-origin'), null);
+  const panelBody = await panelResponse.json();
+  assert.equal(panelBody.schema, 1);
+  assert.equal(typeof panelBody.server_time_ms, 'number');
+  assert.equal(typeof panelBody.sections[0].limits[0].resets_at_ms, 'number');
+  assert.equal(typeof panelBody.sections[0].limits[0].reset_label, 'string');
+  assert.match(panelBody.sections[0].limits[0].reset_label,
+    /^(?:TODAY|SUN|MON|TUE|WED|THU|FRI|SAT) \d{2}:\d{2}$/,
+    'LCD reset target must use the approved compact day and time format');
+  const panelRoot = await fetch(`http://127.0.0.1:${panelPort}/`, {
+    headers: { Authorization: `Bearer ${panelToken}` },
+  });
+  assert.equal(panelRoot.status, 404, 'the LAN listener must expose only the hardware usage endpoint');
   // The first poll must NOT wait for the live Codex query: a cold app-server
   // spawn took long enough that the whole widget, Claude included, sat blank
   // until it answered. So the opening response may legitimately come from the

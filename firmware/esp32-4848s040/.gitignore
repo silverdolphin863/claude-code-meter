@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+*.bin
+*.elf
+*.map
+*.partitions.bin
+*.bootloader.bin

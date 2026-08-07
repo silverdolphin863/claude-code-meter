@@ -41,6 +41,30 @@ at its full native resolution](docs/strip.png).
 
 <a href="docs/strip.png"><img src="docs/strip.png" alt="CC Meter compact strip"></a>
 
+## ESP32 hardware display
+
+CC Meter can drive the JCZN/Guition `ESP32-4848S040` 4-inch 480x480 touch
+display with a dedicated firmware image. The factory weather, clock, and
+lighting interface is replaced completely by the expanded CC Meter dashboard.
+
+USB is the default connection. The same cable powers the screen, carries live
+usage, and handles touch-triggered refreshes. The app detects the board's CH340
+serial interface automatically, so no Wi-Fi credentials or router changes are
+required. An authenticated local Wi-Fi connection is available as an optional
+alternative.
+
+Enable it under **Settings -> Hardware display**. You can then hide the desktop
+widget and leave the tray process running as the data source. Firmware source,
+build instructions, recovery notes, and the exact board pinout are in
+[`firmware/esp32-4848s040`](firmware/esp32-4848s040/).
+
+The normal Windows installer includes the USB data bridge but never flashes a
+display. LCD firmware builds as a separate optional
+`CCMeter-LCD-Firmware-x.y.z.zip` asset beside the installer in the same release.
+Its installation script first saves a complete 16 MB factory-firmware backup,
+then writes the CC Meter image. This add-on is only for the 480x480
+`ESP32-4848S040` board.
+
 ## Install
 
 Download `CCMeter-Setup-x.y.z.exe` from
@@ -99,10 +123,11 @@ Being undocumented, the endpoint may change or stop working without notice.
 ## Local HTTP server
 
 The UI is served from `http://localhost:7373`, and `GET /usage.json` returns the
-local usage data. Browser cross-origin access is disabled by default. If you
-want to drive another display, set `CCMETER_CORS_ORIGIN` to that display's
-specific origin before starting the server. No token or session content is
-returned by this endpoint.
+local usage data. Browser cross-origin access is disabled by default. Enabling
+the hardware display's Wi-Fi transport starts a separate token-protected
+`/panel/v1/usage` listener on port `7374`; the normal browser UI remains bound
+to localhost. No authentication token or session content is returned by either
+usage response.
 
 ## Build it yourself
 

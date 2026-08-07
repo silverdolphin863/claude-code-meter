@@ -1,6 +1,6 @@
 {
   "name": "cc-meter",
-  "version": "1.0.12",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Tray gauge for Claude Code and Codex rate limits",
@@ -10,6 +10,9 @@
     "start": "electron .",
     "serve": "node server.mjs",
     "test": "node test.mjs",
+    "firmware:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-lcd-package.ps1",
+    "docs:verify-lcd-setup": "electron docs/verify-lcd-setup.mjs",
+    "docs:lcd-preview": "electron docs/capture-lcd-preview.mjs",
     "docs:capture": "powershell -NoProfile -ExecutionPolicy Bypass -File docs/capture-panel.ps1 && electron docs/capture-showcase.mjs",
     "dist": "electron-builder --win",
     "pack": "electron-builder --win --dir"
@@ -32,6 +35,12 @@
       "public/**/*",
       "assets/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts/hardware-display-bridge.ps1",
+        "to": "hardware-display-bridge.ps1"
+      }
     ],
     "win": {
       "target": [
