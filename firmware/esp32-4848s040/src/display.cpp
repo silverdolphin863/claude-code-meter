@@ -29,7 +29,7 @@ Arduino_ESP32RGBPanel* rgbPanel = new Arduino_ESP32RGBPanel(
     0 /* pclk_active_neg */, 16000000 /* prefer_speed */, false /* useBigEndian */);
 
 Arduino_RGB_Display* gfx = new Arduino_RGB_Display(
-    kScreenWidth, kScreenHeight, rgbPanel, 0 /* rotation */, true /* auto_flush */,
+    kScreenWidth, kScreenHeight, rgbPanel, 0 /* rotation */, false /* auto_flush */,
     initBus, GFX_NOT_DEFINED /* RST */, st7701_type1_init_operations,
     sizeof(st7701_type1_init_operations));
 
@@ -59,6 +59,7 @@ void displayBegin() {
   gfx->begin();
   initBus->batchOperation(const_cast<uint8_t*>(boardColorOperations), sizeof(boardColorOperations));
   gfx->fillScreen(BLACK);
+  gfx->flush();
   pinMode(kBacklightPin, OUTPUT);
   digitalWrite(kBacklightPin, HIGH);
 }

@@ -9,6 +9,7 @@ The firmware uses the vendor demo wiring without changes:
 - ESP32-S3-WROOM-1, 16 MB flash, 8 MB OPI PSRAM.
 - The host connection is the onboard CH340 UART0 bridge. USB CDC is disabled, so `Serial` uses UART0 at 115200 baud.
 - 480x480 ST7701 RGB panel, backlight GPIO 38, 16 MHz pixel clock, normal RGB565 line mapping, MDT disabled, and display inversion off.
+- Full-screen updates are composed with RGB auto-flush disabled and published once per completed frame, so countdown refreshes do not expose an intermediate cleared screen.
 - RGB panel bus: CS 39, SCK 48, SDA 47, DE 18, VSYNC 17, HSYNC 16, PCLK 21.
 - Red pins 11, 12, 13, 14, 0.
 - Green pins 8, 20, 3, 46, 9, 10.
@@ -55,7 +56,7 @@ Serial runs at 115200 baud over the CH340 UART0 connection. Native USB CDC is di
 After boot, the firmware emits this compact hello line:
 
 ```json
-{"type":"hello","firmware":"1.0.0","model":"ESP32-4848S040"}
+{"type":"hello","firmware":"1.0.1","model":"ESP32-4848S040"}
 ```
 
 The host sends one panel payload per line by wrapping the normal schema-1 object in a usage envelope. The `data` object is the same object accepted by the Wi-Fi endpoint:

@@ -360,36 +360,38 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
 
   if (state == UiState::Setup || state == UiState::ConfigPortal) {
     drawSetupBody(state, apSsid, apIp);
-    return;
-  }
-  if (!snapshot || !snapshot->valid) {
+  } else if (!snapshot || !snapshot->valid) {
     drawEmptyBody(state);
-    return;
+  } else {
+    const UsageSection* claude = findSection(*snapshot, "claude");
+    const UsageSection* codex = findSection(*snapshot, "codex");
+    const size_t claudeRows = visibleLimitCount(claude);
+    const size_t codexRows = visibleLimitCount(codex);
+    const size_t totalRows = claudeRows + codexRows;
+    const int firstY = kHeaderHeight;
+    int claudeRowHeight = 62;
+    int codexRowHeight = 62;
+
+    if (claudeRows == 3 && codexRows == 1) {
+      claudeRowHeight = 82;
+      codexRowHeight = 64;
+    } else if (totalRows > 0) {
+      const int fixedHeight = kCardHeaderHeight * 2 + kCardGap + kCardBottomPadding * 2;
+      const int availableRows = kScreenHeight - firstY - kBottomMargin - fixedHeight;
+      const int sharedRowHeight = std::min(82, std::max(54, availableRows / static_cast<int>(totalRows)));
+      claudeRowHeight = sharedRowHeight;
+      codexRowHeight = sharedRowHeight;
+    }
+
+    drawSection(claude, "claude", firstY, claudeRowHeight, nowEpochMs);
+    const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
+    drawSection(codex, "codex", secondY, codexRowHeight, nowEpochMs);
   }
 
-  const UsageSection* claude = findSection(*snapshot, "claude");
-  const UsageSection* codex = findSection(*snapshot, "codex");
-  const size_t claudeRows = visibleLimitCount(claude);
-  const size_t codexRows = visibleLimitCount(codex);
-  const size_t totalRows = claudeRows + codexRows;
-  const int firstY = kHeaderHeight;
-  int claudeRowHeight = 62;
-  int codexRowHeight = 62;
-
-  if (claudeRows == 3 && codexRows == 1) {
-    claudeRowHeight = 82;
-    codexRowHeight = 64;
-  } else if (totalRows > 0) {
-    const int fixedHeight = kCardHeaderHeight * 2 + kCardGap + kCardBottomPadding * 2;
-    const int availableRows = kScreenHeight - firstY - kBottomMargin - fixedHeight;
-    const int sharedRowHeight = std::min(82, std::max(54, availableRows / static_cast<int>(totalRows)));
-    claudeRowHeight = sharedRowHeight;
-    codexRowHeight = sharedRowHeight;
-  }
-
-  drawSection(claude, "claude", firstY, claudeRowHeight, nowEpochMs);
-  const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
-  drawSection(codex, "codex", secondY, codexRowHeight, nowEpochMs);
+  // The RGB panel scans the same framebuffer that drawing commands modify.
+  // Publish only after the complete frame is composed so the once-per-minute
+  // countdown repaint cannot expose the cleared background between elements.
+  display->flush();
 }
 
 }  // namespace ccmeter

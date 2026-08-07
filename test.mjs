@@ -36,6 +36,11 @@ assert.match(firmwareMainSource, /x >= kUiRefreshTouchLeft && x < kUiRefreshTouc
 const firmwareUiSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.cpp', import.meta.url), 'utf8');
 assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
   'refresh rendering must use the shared touch-aligned icon position');
+assert.match(firmwareUiSource, /display->flush\(\);/,
+  'firmware must publish the LCD framebuffer only after composing a complete frame');
+const firmwareDisplaySource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/display.cpp', import.meta.url), 'utf8');
+assert.match(firmwareDisplaySource, /false \/\* auto_flush \*\//,
+  'firmware RGB drawing must be batched to prevent periodic full-screen flashes');
 console.log('hardware display protocol: PASS');
 
 // v1.0.6 shipped a package whose asar was missing updater.mjs, because
