@@ -98,8 +98,9 @@ bool displayReadTouch(int16_t& x, int16_t& y) {
   touch.read();
   if (!touch.isTouched) return false;
 
-  // The vendor mapping is intentionally inverted on both axes for this panel.
-  x = static_cast<int16_t>(map(touch.points[0].x, 480, 0, 0, gfx->width() - 1));
+  // ROTATION_NORMAL already flips both raw GT911 axes. This board needs that
+  // X flip retained, while Y needs one additional inversion to match the LCD.
+  x = static_cast<int16_t>(map(touch.points[0].x, 0, 480, 0, gfx->width() - 1));
   y = static_cast<int16_t>(map(touch.points[0].y, 480, 0, 0, gfx->height() - 1));
   x = constrain(x, 0, gfx->width() - 1);
   y = constrain(y, 0, gfx->height() - 1);

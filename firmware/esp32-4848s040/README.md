@@ -15,7 +15,7 @@ The firmware uses the vendor demo wiring without changes:
 - Green pins 8, 20, 3, 46, 9, 10.
 - Blue pins 4, 5, 6, 7, 15.
 - GT911 touch: SDA GPIO 19, SCL GPIO 45, no interrupt or reset pin.
-- Touch mapping is the vendor mapping from 480 to 0 on both axes.
+- Touch mapping keeps the GT911 library's X inversion and applies one additional Y inversion to match this panel's physical orientation.
 
 ## Build and flash
 
@@ -56,7 +56,7 @@ Serial runs at 115200 baud over the CH340 UART0 connection. Native USB CDC is di
 After boot, the firmware emits this compact hello line:
 
 ```json
-{"type":"hello","firmware":"1.0.3","model":"ESP32-4848S040"}
+{"type":"hello","firmware":"1.0.4","model":"ESP32-4848S040"}
 ```
 
 The host sends one panel payload per line by wrapping the normal schema-1 object in a usage envelope. The `data` object is the same object accepted by the Wi-Fi endpoint:

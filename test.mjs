@@ -88,6 +88,12 @@ assert.match(firmwareDisplaySource, /false \/\* auto_flush \*\//,
   'firmware RGB drawing must be batched to prevent periodic full-screen flashes');
 assert.match(firmwareDisplaySource, /void displayFlushRect[\s\S]*Cache_WriteBack_Addr/,
   'partial LCD updates must write back only cache-aligned changed rows');
+assert.match(firmwareDisplaySource,
+  /x = static_cast<int16_t>\(map\(touch\.points\[0\]\.x, 0, 480, 0, gfx->width\(\) - 1\)\);/,
+  'physical LCD left and right must map to visual left and right');
+assert.match(firmwareDisplaySource,
+  /y = static_cast<int16_t>\(map\(touch\.points\[0\]\.y, 480, 0, 0, gfx->height\(\) - 1\)\);/,
+  'physical LCD top and bottom must map to visual top and bottom');
 console.log('hardware display protocol: PASS');
 
 // v1.0.6 shipped a package whose asar was missing updater.mjs, because
