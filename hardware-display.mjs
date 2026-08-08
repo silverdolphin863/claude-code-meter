@@ -28,6 +28,8 @@ export class HardwareDisplayController {
     this.restartTimer = null;
     this.stdout = '';
     this.sending = false;
+    this.sendingManual = false;
+    this.pendingManual = false;
     this.state = {
       transport: 'usb',
       connected: false,
@@ -142,6 +144,7 @@ export class HardwareDisplayController {
       } else if (message.type === 'ack') {
         this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
       } else if (message.type === 'refresh') {
+        this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
         this.sendUsage(true);
       }
     }
@@ -149,10 +152,19 @@ export class HardwareDisplayController {
   }
 
   async sendUsage(manual) {
-    if (this.sending || !this.child?.stdin?.writable) return;
+    manual = Boolean(manual);
+    if (this.sending) {
+      // A periodic transfer can overlap the user's tap. Never discard the
+      // explicit request: replay it as soon as the current transfer finishes.
+      if (manual && !this.sendingManual) this.pendingManual = true;
+      return;
+    }
+    if (!this.child?.stdin?.writable) return;
     this.sending = true;
+    this.sendingManual = manual;
+    let replayManual = false;
     try {
-      const data = await this.loadUsage(Boolean(manual));
+      const data = await this.loadUsage(manual);
       const line = encodeHardwareUsage(data) + '\n';
       this.child.stdin.write(line);
       this.emit({ lastSent: new Date().toISOString(), error: null });
@@ -160,7 +172,11 @@ export class HardwareDisplayController {
       this.emit({ error: 'Usage data unavailable' });
     } finally {
       this.sending = false;
+      this.sendingManual = false;
+      replayManual = this.pendingManual;
+      this.pendingManual = false;
     }
+    if (replayManual) await this.sendUsage(true);
   }
 
   stop() {
@@ -168,6 +184,7 @@ export class HardwareDisplayController {
     clearInterval(this.pollTimer);
     this.restartTimer = null;
     this.pollTimer = null;
+    this.pendingManual = false;
     const child = this.child;
     this.child = null;
     if (!child) return;

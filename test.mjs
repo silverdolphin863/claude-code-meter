@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { constrainCompactBounds } from './window-geometry.mjs';
-import { encodeHardwareUsage, parseHardwareMessage } from './hardware-display.mjs';
+import { HardwareDisplayController, encodeHardwareUsage, parseHardwareMessage } from './hardware-display.mjs';
 
 const workArea = { x: 100, y: 40, width: 1920, height: 1040 };
 assert.deepEqual(
@@ -25,6 +25,28 @@ console.log('compact geometry: PASS');
 assert.deepEqual(parseHardwareMessage('{"type":"ack"}'), { type: 'ack' });
 assert.equal(parseHardwareMessage('not json'), null);
 assert.equal(encodeHardwareUsage({ schema: 1 }), '{"type":"usage","data":{"schema":1}}');
+{
+  let releaseFirst;
+  const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
+  const calls = [];
+  const writes = [];
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async (manual) => {
+      calls.push(manual);
+      if (calls.length === 1) await firstBlocked;
+      return { schema: 1, manual };
+    },
+  });
+  controller.child = { stdin: { writable: true, write: (line) => writes.push(line) } };
+  const periodic = controller.sendUsage(false);
+  await Promise.resolve();
+  await controller.sendUsage(true);
+  releaseFirst();
+  await periodic;
+  assert.deepEqual(calls, [false, true], 'a tap during a periodic send must be replayed as manual');
+  assert.equal(writes.length, 2, 'both the periodic payload and queued manual payload must reach USB');
+}
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
@@ -33,6 +55,12 @@ assert.match(firmwareMainSource, /Serial\.setRxBufferSize\(kSerialRxBufferBytes\
   'firmware must enlarge its UART receive buffer before starting serial');
 assert.match(firmwareMainSource, /x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight/,
   'refresh touch handling must use the same shared geometry as the drawn icon');
+assert.match(firmwareMainSource, /serialRefreshPending = true;[\s\S]*refreshDynamicNow\(\)/,
+  'a serial refresh tap must display immediate feedback while waiting for the host');
+assert.match(firmwareMainSource, /else if \(completedSerialRefresh\) requestDynamicRender\(\);/,
+  'refresh feedback must clear even when the returned percentages are unchanged');
+assert.match(firmwareMainSource, /serviceSerialRefreshTimeout\(\);/,
+  'refresh feedback must clear if the host never answers');
 assert.match(firmwareMainSource, /if \(due\(nextRenderAt, millis\(\)\)\) refreshDynamicNow\(\);/,
   'the one-minute timer must use the partial dynamic repaint path');
 assert.match(firmwareMainSource, /if \(fullRenderPending\) \{\s*drawNow\(\);/,
@@ -40,6 +68,11 @@ assert.match(firmwareMainSource, /if \(fullRenderPending\) \{\s*drawNow\(\);/,
 assert.match(firmwareMainSource, /if \(layoutChanged \|\| currentUiState\(\) != previousUiState\) requestFullRender\(\);\s*else if \(visibleDataChanged\) requestSnapshotRender\(\);/,
   'ordinary usage changes must use partial rendering when the card layout is unchanged');
 const firmwareUiSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.cpp', import.meta.url), 'utf8');
+const firmwareUiHeaderSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.h', import.meta.url), 'utf8');
+const touchBottom = Number(/kUiHeaderTouchBottom = (\d+)/.exec(firmwareUiHeaderSource)?.[1]);
+const touchLeft = Number(/kUiRefreshTouchLeft = (\d+)/.exec(firmwareUiHeaderSource)?.[1]);
+assert.ok(touchBottom >= 53 && touchLeft <= 390,
+  'the physical refresh target must be substantially larger than its visible glyph');
 assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
   'refresh rendering must use the shared touch-aligned icon position');
 assert.match(firmwareUiSource, /display->flush\(\);/,

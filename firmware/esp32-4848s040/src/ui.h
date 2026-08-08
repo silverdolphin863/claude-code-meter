@@ -6,8 +6,10 @@ namespace ccmeter {
 
 constexpr int kUiRefreshIconCenterX = 418;
 constexpr int kUiSettingsIconCenterX = 452;
-constexpr int kUiHeaderTouchBottom = 45;
-constexpr int kUiRefreshTouchLeft = 398;
+// Finger targets are deliberately larger than the 18 px glyphs. The cards
+// begin below this header zone, and the midpoint keeps refresh/settings apart.
+constexpr int kUiHeaderTouchBottom = 53;
+constexpr int kUiRefreshTouchLeft = 388;
 constexpr int kUiRefreshTouchRight = 438;
 constexpr int kUiSettingsTouchLeft = 438;
 constexpr int kUiSettingsTouchRight = 479;

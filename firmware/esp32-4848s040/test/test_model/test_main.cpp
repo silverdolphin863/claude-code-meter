@@ -68,7 +68,7 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.0.2\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.0.3\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
 }

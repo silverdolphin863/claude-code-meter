@@ -16,6 +16,7 @@ namespace {
 
 constexpr uint32_t kPollIntervalMs = 30000;
 constexpr uint32_t kManualRefreshCooldownMs = 2000;
+constexpr uint32_t kSerialRefreshTimeoutMs = 20000;
 constexpr uint32_t kWifiAttemptTimeoutMs = 15000;
 constexpr uint32_t kRenderIntervalMs = 60000;
 constexpr uint64_t kStaleThresholdMs = 15ULL * 60ULL * 1000ULL;
@@ -33,11 +34,13 @@ bool hasPollAttempt = false;
 bool stationConnected = false;
 bool wifiAttempting = false;
 bool refreshing = false;
+bool serialRefreshPending = false;
 bool touchDown = false;
 bool serialUsageActive = false;
 uint32_t wifiAttemptStartedAt = 0;
 uint32_t nextPollAt = 0;
 uint32_t lastManualRefreshAt = 0;
+uint32_t serialRefreshRequestedAt = 0;
 uint32_t lastSuccessAt = 0;
 uint32_t nextRenderAt = 0;
 bool fullRenderPending = true;
@@ -216,6 +219,7 @@ void serviceWifi() {
 void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) {
   UsageSnapshot nextSnapshot = incomingSnapshot;
   const UiState previousUiState = currentUiState();
+  const bool completedSerialRefresh = fromSerial && serialRefreshPending;
   const bool visibleDataChanged = !hasSnapshot || !snapshotVisuallyEqual(usageSnapshot, nextSnapshot);
   const bool layoutChanged = !hasSnapshot || !snapshotLayoutEqual(usageSnapshot, nextSnapshot);
   const uint64_t receivedSystemTime = systemEpochMs();
@@ -227,6 +231,10 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
   }
 
   const uint32_t successAt = millis();
+  if (completedSerialRefresh) {
+    serialRefreshPending = false;
+    refreshing = false;
+  }
   usageSnapshot = nextSnapshot;
   hasSnapshot = true;
   hasPollAttempt = true;
@@ -246,6 +254,7 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
   }
   if (layoutChanged || currentUiState() != previousUiState) requestFullRender();
   else if (visibleDataChanged) requestSnapshotRender();
+  else if (completedSerialRefresh) requestDynamicRender();
 }
 
 void performPoll(bool manual) {
@@ -402,8 +411,21 @@ void serviceTouch() {
   if (touchDown) return;
   touchDown = true;
   if (y <= kUiHeaderTouchBottom && x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight) {
+    const uint32_t now = millis();
+    if (lastManualRefreshAt != 0 && elapsed(now, lastManualRefreshAt) < kManualRefreshCooldownMs) return;
     Serial.println(serialRefreshLine());
-    if (deviceConfig.configured() && stationConnected) performPoll(true);
+    if (serialUsageActive || !deviceConfig.configured() || !stationConnected) {
+      lastManualRefreshAt = now;
+      serialRefreshPending = true;
+      serialRefreshRequestedAt = now;
+      refreshing = true;
+      // Turn the glyph green immediately so a physical tap always has visible
+      // feedback while the Windows host performs the authenticated refresh.
+      if (hasSnapshot && !fullRenderPending) refreshDynamicNow();
+      else drawNow();
+    } else {
+      performPoll(true);
+    }
     return;
   }
   if (y <= kUiHeaderTouchBottom && x >= kUiSettingsTouchLeft && x <= kUiSettingsTouchRight) {
@@ -415,6 +437,14 @@ void serviceTouch() {
     }
     requestFullRender();
   }
+}
+
+void serviceSerialRefreshTimeout() {
+  if (!serialRefreshPending) return;
+  if (elapsed(millis(), serialRefreshRequestedAt) < kSerialRefreshTimeoutMs) return;
+  serialRefreshPending = false;
+  refreshing = false;
+  requestDynamicRender();
 }
 
 }  // namespace
@@ -438,6 +468,7 @@ void loop() {
   serviceWifi();
   servicePoll();
   serviceTouch();
+  serviceSerialRefreshTimeout();
   if (due(nextRenderAt, millis())) refreshDynamicNow();
   delay(5);
 }

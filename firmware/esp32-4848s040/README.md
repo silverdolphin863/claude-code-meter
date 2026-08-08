@@ -56,7 +56,7 @@ Serial runs at 115200 baud over the CH340 UART0 connection. Native USB CDC is di
 After boot, the firmware emits this compact hello line:
 
 ```json
-{"type":"hello","firmware":"1.0.2","model":"ESP32-4848S040"}
+{"type":"hello","firmware":"1.0.3","model":"ESP32-4848S040"}
 ```
 
 The host sends one panel payload per line by wrapping the normal schema-1 object in a usage envelope. The `data` object is the same object accepted by the Wi-Fi endpoint:
@@ -71,13 +71,21 @@ After a valid usage envelope is applied and rendered, the firmware emits:
 {"type":"ack"}
 ```
 
-If the on-screen refresh icon is touched, the firmware immediately emits:
+If the on-screen refresh icon is touched, the enlarged finger target turns the
+icon green immediately and the firmware emits:
 
 ```json
 {"type":"refresh"}
 ```
 
-The host should answer with a new usage envelope. If Wi-Fi fallback credentials exist, the firmware may also request `/panel/v1/usage?refresh=1` directly, but the serial refresh event and serial data path remain independent. Invalid usage envelopes produce the generic response `{"type":"error","error":"invalid_usage"}` and do not replace the last valid values.
+The host should answer with a new usage envelope. A manual request that overlaps
+a routine USB transfer is queued rather than discarded. The green feedback
+clears when the response arrives, or after 20 seconds if the host does not
+answer. If Wi-Fi fallback credentials exist, the firmware may also request
+`/panel/v1/usage?refresh=1` directly, but the serial refresh event and serial
+data path remain independent. Invalid usage envelopes produce the generic
+response `{"type":"error","error":"invalid_usage"}` and do not replace the
+last valid values.
 
 The existing configuration commands remain available:
 
