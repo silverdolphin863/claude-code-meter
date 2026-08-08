@@ -158,6 +158,17 @@ UsageTone stateTone(UiState state) {
   return UsageTone::Red;
 }
 
+void drawHeaderDynamic(UiState state, bool refreshing, uint64_t dataAgeMs) {
+  char age[16] = {};
+  formatAge(dataAgeMs, age, sizeof(age));
+  drawFontRightText(341, 20, age, kSmoothFont11, kMuted, kBackground);
+  canvas()->fillCircle(354, 27, 4, toneColor(stateTone(state)));
+  drawFontRightText(393, 20, state == UiState::SerialOnline ? "USB" : stateLabel(state),
+                    kSmoothFont11, toneColor(stateTone(state)), kBackground);
+  drawRefreshIcon(kUiRefreshIconCenterX, 27, refreshing);
+  drawSettingsIcon(kUiSettingsIconCenterX, 27, state == UiState::ConfigPortal);
+}
+
 void uppercaseCopy(const char* source, char* destination, size_t destinationSize) {
   if (!destination || destinationSize == 0) return;
   if (!source) source = "";
@@ -240,21 +251,8 @@ void drawEmptyBody(UiState state) {
   }
 }
 
-void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
+void drawLimitMetrics(const UsageLimit& limit, int labelY, uint64_t nowEpochMs) {
   const uint16_t usageColor = toneColor(usageTone(limit.percent));
-  char countdown[32] = {};
-  char resetLabel[24] = {};
-  formatCountdown(limit.hasReset ? limit.resetEpochMs : 0, nowEpochMs, countdown, sizeof(countdown));
-  if (limit.resetLabel[0]) {
-    strncpy(resetLabel, limit.resetLabel, sizeof(resetLabel) - 1);
-  } else {
-    formatResetLabel(limit.hasReset ? limit.resetEpochMs : 0, limit.hasWindow ? limit.windowHours : 0.0f,
-                     resetLabel, sizeof(resetLabel));
-  }
-
-  const int labelY = y;
-  drawFontText(kContentLeft, labelY, limitDisplayLabel(limit), kSmoothFont18, kText, kCard);
-
   char percent[8] = {};
   snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(limit.percent + 0.5f));
 
@@ -273,20 +271,19 @@ void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpo
     drawFontCenteredText(paceX, kPaceWidth, labelY + 1, paceText, kSmoothFont15,
                          toneColor(paceTone(pace)), kBadge);
   }
+}
 
-  constexpr int kBarHeight = 12;
-  constexpr int kStripeSpan = kBarHeight - 1;
-  const int barY = y + 28;
-  canvas()->fillRoundRect(kContentLeft, barY, kContentWidth, kBarHeight, 6, kTrack);
-  for (int stripe = kContentLeft + 6; stripe + kStripeSpan < kContentRight - 6; stripe += 14) {
-    canvas()->drawLine(stripe, barY + kStripeSpan, stripe + kStripeSpan, barY, rgb(55, 51, 67));
-  }
-  const int fillWidth = static_cast<int>(kContentWidth * std::max(0.0f, std::min(100.0f, limit.percent)) / 100.0f);
-  if (fillWidth > 0) {
-    canvas()->fillRoundRect(kContentLeft, barY, std::max(6, fillWidth), kBarHeight, 6, usageColor);
+void drawLimitReset(const UsageLimit& limit, int subY, uint64_t nowEpochMs) {
+  char countdown[32] = {};
+  char resetLabel[24] = {};
+  formatCountdown(limit.hasReset ? limit.resetEpochMs : 0, nowEpochMs, countdown, sizeof(countdown));
+  if (limit.resetLabel[0]) {
+    strncpy(resetLabel, limit.resetLabel, sizeof(resetLabel) - 1);
+  } else {
+    formatResetLabel(limit.hasReset ? limit.resetEpochMs : 0, limit.hasWindow ? limit.windowHours : 0.0f,
+                     resetLabel, sizeof(resetLabel));
   }
 
-  const int subY = y + (rowHeight >= 64 ? 47 : 42);
   const char* countdownText = countdown[0] ? countdown : "No reset";
   constexpr const char* kResetPrefix = "Resets in ";
   if (strncmp(countdownText, kResetPrefix, strlen(kResetPrefix)) == 0) {
@@ -298,6 +295,104 @@ void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpo
     char target[sizeof(resetLabel)] = {};
     uppercaseCopy(resetLabel, target, sizeof(target));
     drawFontRightText(kContentRight, subY + 1, target, kSmoothFont13, kMuted, kCard);
+  }
+}
+
+void drawLimitBar(const UsageLimit& limit, int barY) {
+  const uint16_t usageColor = toneColor(usageTone(limit.percent));
+  constexpr int kBarHeight = 12;
+  constexpr int kStripeSpan = kBarHeight - 1;
+  canvas()->fillRoundRect(kContentLeft, barY, kContentWidth, kBarHeight, 6, kTrack);
+  for (int stripe = kContentLeft + 6; stripe + kStripeSpan < kContentRight - 6; stripe += 14) {
+    canvas()->drawLine(stripe, barY + kStripeSpan, stripe + kStripeSpan, barY, rgb(55, 51, 67));
+  }
+  const int fillWidth = static_cast<int>(kContentWidth *
+      std::max(0.0f, std::min(100.0f, limit.percent)) / 100.0f);
+  if (fillWidth > 0) {
+    canvas()->fillRoundRect(kContentLeft, barY, std::max(6, fillWidth), kBarHeight, 6, usageColor);
+  }
+}
+
+void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
+  const int labelY = y;
+  drawFontText(kContentLeft, labelY, limitDisplayLabel(limit), kSmoothFont18, kText, kCard);
+  drawLimitMetrics(limit, labelY, nowEpochMs);
+
+  const int barY = y + 28;
+  drawLimitBar(limit, barY);
+
+  const int subY = y + (rowHeight >= 64 ? 47 : 42);
+  drawLimitReset(limit, subY, nowEpochMs);
+}
+
+void refreshLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
+  constexpr int kLabelTopPadding = 1;
+  constexpr int kLabelHeight = 24;
+  const int labelY = y - kLabelTopPadding;
+  canvas()->fillRect(kContentLeft, labelY, kContentWidth, kLabelHeight, kCard);
+  drawFontText(kContentLeft, y, limitDisplayLabel(limit), kSmoothFont18, kText, kCard);
+  drawLimitMetrics(limit, y, nowEpochMs);
+  displayFlushRect(kContentLeft, labelY, kContentWidth, kLabelHeight);
+
+  constexpr int kBarHeight = 12;
+  const int barY = y + 28;
+  canvas()->fillRect(kContentLeft, barY, kContentWidth, kBarHeight, kCard);
+  drawLimitBar(limit, barY);
+  displayFlushRect(kContentLeft, barY, kContentWidth, kBarHeight);
+
+  constexpr int kSubTopPadding = 1;
+  constexpr int kSubHeight = 22;
+  const int subY = y + (rowHeight >= 64 ? 47 : 42);
+  canvas()->fillRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight, kCard);
+  drawLimitReset(limit, subY, nowEpochMs);
+  displayFlushRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight);
+}
+
+void refreshLimitTime(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
+  constexpr int kMetricLeft = 340;
+  constexpr int kMetricTopPadding = 1;
+  constexpr int kMetricHeight = 24;
+  const int metricY = y - kMetricTopPadding;
+  canvas()->fillRect(kMetricLeft, metricY, kContentRight - kMetricLeft + 1, kMetricHeight, kCard);
+  drawLimitMetrics(limit, y, nowEpochMs);
+  displayFlushRect(kMetricLeft, metricY, kContentRight - kMetricLeft + 1, kMetricHeight);
+
+  constexpr int kSubTopPadding = 1;
+  constexpr int kSubHeight = 22;
+  const int subY = y + (rowHeight >= 64 ? 47 : 42);
+  canvas()->fillRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight, kCard);
+  drawLimitReset(limit, subY, nowEpochMs);
+  displayFlushRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight);
+}
+
+void calculateRowHeights(const UsageSection* claude, const UsageSection* codex,
+                         int& claudeRowHeight, int& codexRowHeight) {
+  const size_t claudeRows = visibleLimitCount(claude);
+  const size_t codexRows = visibleLimitCount(codex);
+  const size_t totalRows = claudeRows + codexRows;
+  claudeRowHeight = 62;
+  codexRowHeight = 62;
+
+  if (claudeRows == 3 && codexRows == 1) {
+    claudeRowHeight = 82;
+    codexRowHeight = 64;
+  } else if (totalRows > 0) {
+    const int fixedHeight = kCardHeaderHeight * 2 + kCardGap + kCardBottomPadding * 2;
+    const int availableRows = kScreenHeight - kHeaderHeight - kBottomMargin - fixedHeight;
+    const int sharedRowHeight = std::min(82, std::max(54, availableRows / static_cast<int>(totalRows)));
+    claudeRowHeight = sharedRowHeight;
+    codexRowHeight = sharedRowHeight;
+  }
+}
+
+void refreshSection(const UsageSection* section, int y, int rowHeight,
+                    uint64_t nowEpochMs, bool snapshotValuesChanged) {
+  if (!section) return;
+  const size_t count = visibleLimitCount(section);
+  for (size_t i = 0; i < count; ++i) {
+    const int rowY = y + kCardHeaderHeight + static_cast<int>(i) * rowHeight;
+    if (snapshotValuesChanged) refreshLimitRow(section->limits[i], rowY, rowHeight, nowEpochMs);
+    else refreshLimitTime(section->limits[i], rowY, rowHeight, nowEpochMs);
   }
 }
 
@@ -341,6 +436,32 @@ void drawSection(const UsageSection* source, const char* fallbackId, int y, int 
   }
 }
 
+void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                      uint64_t nowEpochMs, uint64_t dataAgeMs, bool snapshotValuesChanged) {
+  constexpr int kHeaderDynamicLeft = 276;
+  constexpr int kHeaderDynamicTop = 14;
+  constexpr int kHeaderDynamicWidth = 190;
+  constexpr int kHeaderDynamicHeight = 28;
+  canvas()->fillRect(kHeaderDynamicLeft, kHeaderDynamicTop,
+                     kHeaderDynamicWidth, kHeaderDynamicHeight, kBackground);
+  drawHeaderDynamic(state, refreshing, dataAgeMs);
+  displayFlushRect(kHeaderDynamicLeft, kHeaderDynamicTop,
+                   kHeaderDynamicWidth, kHeaderDynamicHeight);
+
+  if (!snapshot || !snapshot->valid || state == UiState::Setup || state == UiState::ConfigPortal) return;
+
+  const UsageSection* claude = findSection(*snapshot, "claude");
+  const UsageSection* codex = findSection(*snapshot, "codex");
+  int claudeRowHeight = 0;
+  int codexRowHeight = 0;
+  calculateRowHeights(claude, codex, claudeRowHeight, codexRowHeight);
+
+  const int firstY = kHeaderHeight;
+  refreshSection(claude, firstY, claudeRowHeight, nowEpochMs, snapshotValuesChanged);
+  const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
+  refreshSection(codex, secondY, codexRowHeight, nowEpochMs, snapshotValuesChanged);
+}
+
 }  // namespace
 
 void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
@@ -349,14 +470,7 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   display->fillScreen(kBackground);
 
   drawFontText(17, 16, "CC Meter", kSmoothFont18, kText, kBackground);
-  char age[16] = {};
-  formatAge(dataAgeMs, age, sizeof(age));
-  drawFontRightText(341, 20, age, kSmoothFont11, kMuted, kBackground);
-  display->fillCircle(354, 27, 4, toneColor(stateTone(state)));
-  drawFontRightText(393, 20, state == UiState::SerialOnline ? "USB" : stateLabel(state),
-                    kSmoothFont11, toneColor(stateTone(state)), kBackground);
-  drawRefreshIcon(kUiRefreshIconCenterX, 27, refreshing);
-  drawSettingsIcon(kUiSettingsIconCenterX, 27, state == UiState::ConfigPortal);
+  drawHeaderDynamic(state, refreshing, dataAgeMs);
 
   if (state == UiState::Setup || state == UiState::ConfigPortal) {
     drawSetupBody(state, apSsid, apIp);
@@ -365,23 +479,10 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   } else {
     const UsageSection* claude = findSection(*snapshot, "claude");
     const UsageSection* codex = findSection(*snapshot, "codex");
-    const size_t claudeRows = visibleLimitCount(claude);
-    const size_t codexRows = visibleLimitCount(codex);
-    const size_t totalRows = claudeRows + codexRows;
     const int firstY = kHeaderHeight;
-    int claudeRowHeight = 62;
-    int codexRowHeight = 62;
-
-    if (claudeRows == 3 && codexRows == 1) {
-      claudeRowHeight = 82;
-      codexRowHeight = 64;
-    } else if (totalRows > 0) {
-      const int fixedHeight = kCardHeaderHeight * 2 + kCardGap + kCardBottomPadding * 2;
-      const int availableRows = kScreenHeight - firstY - kBottomMargin - fixedHeight;
-      const int sharedRowHeight = std::min(82, std::max(54, availableRows / static_cast<int>(totalRows)));
-      claudeRowHeight = sharedRowHeight;
-      codexRowHeight = sharedRowHeight;
-    }
+    int claudeRowHeight = 0;
+    int codexRowHeight = 0;
+    calculateRowHeights(claude, codex, claudeRowHeight, codexRowHeight);
 
     drawSection(claude, "claude", firstY, claudeRowHeight, nowEpochMs);
     const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
@@ -392,6 +493,19 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   // Publish only after the complete frame is composed so the once-per-minute
   // countdown repaint cannot expose the cleared background between elements.
   display->flush();
+}
+
+void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                      uint64_t nowEpochMs, uint64_t dataAgeMs) {
+  // The ST7701 panel scans a single framebuffer continuously. A complete cache
+  // writeback can be seen as a flash, so the one-minute timer only redraws and
+  // publishes the small regions whose text changes with time.
+  refreshUiRegions(snapshot, state, refreshing, nowEpochMs, dataAgeMs, false);
+}
+
+void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                       uint64_t nowEpochMs, uint64_t dataAgeMs) {
+  refreshUiRegions(snapshot, state, refreshing, nowEpochMs, dataAgeMs, true);
 }
 
 }  // namespace ccmeter

@@ -31,5 +31,9 @@ enum class UiState : uint8_t {
 
 void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
             uint64_t nowEpochMs, uint64_t dataAgeMs, const char* apSsid, const char* apIp);
+void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                      uint64_t nowEpochMs, uint64_t dataAgeMs);
+void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                       uint64_t nowEpochMs, uint64_t dataAgeMs);
 
 }  // namespace ccmeter

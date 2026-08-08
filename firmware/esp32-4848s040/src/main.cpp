@@ -40,6 +40,8 @@ uint32_t nextPollAt = 0;
 uint32_t lastManualRefreshAt = 0;
 uint32_t lastSuccessAt = 0;
 uint32_t nextRenderAt = 0;
+bool fullRenderPending = true;
+bool snapshotRenderPending = false;
 uint64_t clockBaseEpochMs = 0;
 uint32_t clockBaseMillis = 0;
 bool clockValid = false;
@@ -88,6 +90,22 @@ bool snapshotVisuallyEqual(const UsageSnapshot& left, const UsageSnapshot& right
   return true;
 }
 
+bool sectionLayoutEqual(const UsageSection& left, const UsageSection& right) {
+  return strcmp(left.id, right.id) == 0 && strcmp(left.name, right.name) == 0 &&
+         strcmp(left.plan, right.plan) == 0 && left.limitCount == right.limitCount &&
+         left.present == right.present && left.installed == right.installed &&
+         left.authRequired == right.authRequired && left.refreshError == right.refreshError &&
+         left.hasError == right.hasError;
+}
+
+bool snapshotLayoutEqual(const UsageSnapshot& left, const UsageSnapshot& right) {
+  if (left.valid != right.valid || left.sectionCount != right.sectionCount) return false;
+  for (size_t i = 0; i < left.sectionCount; ++i) {
+    if (!sectionLayoutEqual(left.sections[i], right.sections[i])) return false;
+  }
+  return true;
+}
+
 uint64_t systemEpochMs() {
   const time_t current = time(nullptr);
   if (current < 1700000000) return 0;
@@ -132,6 +150,40 @@ void drawNow() {
   const String apIp = configPortal.active() ? configPortal.ipAddress() : String();
   uiDraw(hasSnapshot ? &usageSnapshot : nullptr, currentUiState(), refreshing, currentEpochMs(), dataAgeMs(),
          apSsid.c_str(), apIp.c_str());
+  fullRenderPending = false;
+  snapshotRenderPending = false;
+  nextRenderAt = millis() + kRenderIntervalMs;
+}
+
+void requestFullRender() {
+  fullRenderPending = true;
+  snapshotRenderPending = false;
+  nextRenderAt = 0;
+}
+
+void requestSnapshotRender() {
+  if (fullRenderPending) return;
+  snapshotRenderPending = true;
+  nextRenderAt = 0;
+}
+
+void requestDynamicRender() {
+  if (!fullRenderPending && !snapshotRenderPending) nextRenderAt = 0;
+}
+
+void refreshDynamicNow() {
+  if (fullRenderPending) {
+    drawNow();
+    return;
+  }
+  if (snapshotRenderPending) {
+    uiRefreshSnapshot(hasSnapshot ? &usageSnapshot : nullptr, currentUiState(), refreshing,
+                      currentEpochMs(), dataAgeMs());
+    snapshotRenderPending = false;
+  } else {
+    uiRefreshDynamic(hasSnapshot ? &usageSnapshot : nullptr, currentUiState(), refreshing,
+                     currentEpochMs(), dataAgeMs());
+  }
   nextRenderAt = millis() + kRenderIntervalMs;
 }
 
@@ -165,6 +217,7 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
   UsageSnapshot nextSnapshot = incomingSnapshot;
   const UiState previousUiState = currentUiState();
   const bool visibleDataChanged = !hasSnapshot || !snapshotVisuallyEqual(usageSnapshot, nextSnapshot);
+  const bool layoutChanged = !hasSnapshot || !snapshotLayoutEqual(usageSnapshot, nextSnapshot);
   const uint64_t receivedSystemTime = systemEpochMs();
   if (nextSnapshot.hasGeneratedAt && receivedSystemTime > nextSnapshot.generatedAtEpochMs) {
     const uint64_t generatedAge = receivedSystemTime - nextSnapshot.generatedAtEpochMs;
@@ -191,7 +244,8 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
     clockBaseMillis = successAt;
     clockValid = true;
   }
-  if (visibleDataChanged || currentUiState() != previousUiState) nextRenderAt = 0;
+  if (layoutChanged || currentUiState() != previousUiState) requestFullRender();
+  else if (visibleDataChanged) requestSnapshotRender();
 }
 
 void performPoll(bool manual) {
@@ -203,9 +257,11 @@ void performPoll(bool manual) {
     return;
   }
 
+  const UiState previousUiState = currentUiState();
   if (manual) lastManualRefreshAt = millis();
   refreshing = true;
-  drawNow();
+  if (hasSnapshot && !fullRenderPending) refreshDynamicNow();
+  else drawNow();
   UsageSnapshot nextSnapshot;
   const FetchResult result = usageClient.fetch(manual, nextSnapshot);
   hasPollAttempt = true;
@@ -215,7 +271,8 @@ void performPoll(bool manual) {
   }
   refreshing = false;
   nextPollAt = millis() + kPollIntervalMs;
-  nextRenderAt = 0;
+  if (!hasSnapshot || currentUiState() != previousUiState) requestFullRender();
+  else requestDynamicRender();
 }
 
 void servicePoll() {
@@ -304,7 +361,7 @@ void processSerialCommand(const char* rawLine) {
   serialUsageActive = false;
   lastFetchResult = FetchResult::Offline;
   beginWifi();
-  nextRenderAt = 0;
+  requestFullRender();
   Serial.println("OK configured; connecting");
 }
 
@@ -356,7 +413,7 @@ void serviceTouch() {
     } else {
       configPortal.begin(deviceConfig, deviceConfig.configured());
     }
-    nextRenderAt = 0;
+    requestFullRender();
   }
 }
 
@@ -371,7 +428,7 @@ void setup() {
   displayBegin();
   loadDeviceConfig(deviceConfig);
   if (deviceConfig.configured()) beginWifi();
-  nextRenderAt = 0;
+  requestFullRender();
 }
 
 void loop() {
@@ -381,6 +438,6 @@ void loop() {
   serviceWifi();
   servicePoll();
   serviceTouch();
-  if (due(nextRenderAt, millis())) drawNow();
+  if (due(nextRenderAt, millis())) refreshDynamicNow();
   delay(5);
 }

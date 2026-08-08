@@ -33,14 +33,28 @@ assert.match(firmwareMainSource, /Serial\.setRxBufferSize\(kSerialRxBufferBytes\
   'firmware must enlarge its UART receive buffer before starting serial');
 assert.match(firmwareMainSource, /x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight/,
   'refresh touch handling must use the same shared geometry as the drawn icon');
+assert.match(firmwareMainSource, /if \(due\(nextRenderAt, millis\(\)\)\) refreshDynamicNow\(\);/,
+  'the one-minute timer must use the partial dynamic repaint path');
+assert.match(firmwareMainSource, /if \(fullRenderPending\) \{\s*drawNow\(\);/,
+  'structural changes must still request a complete render');
+assert.match(firmwareMainSource, /if \(layoutChanged \|\| currentUiState\(\) != previousUiState\) requestFullRender\(\);\s*else if \(visibleDataChanged\) requestSnapshotRender\(\);/,
+  'ordinary usage changes must use partial rendering when the card layout is unchanged');
 const firmwareUiSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.cpp', import.meta.url), 'utf8');
 assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
   'refresh rendering must use the shared touch-aligned icon position');
 assert.match(firmwareUiSource, /display->flush\(\);/,
   'firmware must publish the LCD framebuffer only after composing a complete frame');
+assert.match(firmwareUiSource, /void refreshLimitTime[\s\S]*displayFlushRect\(/,
+  'minute-driven LCD changes must flush only the small regions that changed');
+assert.match(firmwareUiSource, /void refreshLimitRow[\s\S]*drawLimitBar[\s\S]*displayFlushRect\(/,
+  'partial snapshot updates must redraw usage bars without publishing the full screen');
+assert.match(firmwareUiSource, /void uiRefreshSnapshot[\s\S]*refreshUiRegions\([^;]+true\);/,
+  'new usage values must use the row-level snapshot repaint path');
 const firmwareDisplaySource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/display.cpp', import.meta.url), 'utf8');
 assert.match(firmwareDisplaySource, /false \/\* auto_flush \*\//,
   'firmware RGB drawing must be batched to prevent periodic full-screen flashes');
+assert.match(firmwareDisplaySource, /void displayFlushRect[\s\S]*Cache_WriteBack_Addr/,
+  'partial LCD updates must write back only cache-aligned changed rows');
 console.log('hardware display protocol: PASS');
 
 // v1.0.6 shipped a package whose asar was missing updater.mjs, because

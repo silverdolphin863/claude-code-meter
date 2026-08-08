@@ -68,6 +68,32 @@ Arduino_GFX* displayCanvas() {
   return gfx;
 }
 
+void displayFlushRect(int16_t x, int16_t y, int16_t width, int16_t height) {
+  if (width <= 0 || height <= 0) return;
+
+  const int16_t left = constrain(x, 0, kScreenWidth);
+  const int16_t top = constrain(y, 0, kScreenHeight);
+  const int16_t right = constrain(x + width, 0, kScreenWidth);
+  const int16_t bottom = constrain(y + height, 0, kScreenHeight);
+  if (left >= right || top >= bottom) return;
+
+  uint16_t* framebuffer = gfx->getFramebuffer();
+  if (!framebuffer) return;
+
+  // The RGB DMA engine continuously scans the single PSRAM framebuffer. A
+  // whole-frame cache writeback is therefore visible while it is in progress.
+  // Write back only the rows that changed, aligned to ESP32-S3 cache lines.
+  constexpr uintptr_t kCacheLineBytes = 32;
+  for (int16_t row = top; row < bottom; ++row) {
+    const uintptr_t firstByte = reinterpret_cast<uintptr_t>(framebuffer + row * kScreenWidth + left);
+    const uintptr_t lastByte = reinterpret_cast<uintptr_t>(framebuffer + row * kScreenWidth + right);
+    const uintptr_t alignedFirst = firstByte & ~(kCacheLineBytes - 1);
+    const uintptr_t alignedLast = (lastByte + kCacheLineBytes - 1) & ~(kCacheLineBytes - 1);
+    Cache_WriteBack_Addr(static_cast<uint32_t>(alignedFirst),
+                         static_cast<uint32_t>(alignedLast - alignedFirst));
+  }
+}
+
 bool displayReadTouch(int16_t& x, int16_t& y) {
   touch.read();
   if (!touch.isTouched) return false;
