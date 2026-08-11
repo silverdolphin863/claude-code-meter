@@ -55,6 +55,12 @@ assert.match(firmwareMainSource, /Serial\.setRxBufferSize\(kSerialRxBufferBytes\
   'firmware must enlarge its UART receive buffer before starting serial');
 assert.match(firmwareMainSource, /x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight/,
   'refresh touch handling must use the same shared geometry as the drawn icon');
+assert.match(firmwareMainSource, /x >= kUiSettingsTouchLeft && x <= kUiSettingsTouchRight[\s\S]*configPortal\.begin/,
+  'the top-right settings target must open the optional Wi-Fi setup portal');
+assert.match(firmwareMainSource, /if \(configPortal\.active\(\)\) \{\s*configPortal\.stop\(\);\s*if \(deviceConfig\.configured\(\)\) beginWifi\(\);/,
+  'a second settings tap must close setup even when optional Wi-Fi was never configured');
+assert.doesNotMatch(firmwareMainSource, /if \(configPortal\.active\(\)\) configPortal\.stop\(\);\s*applyUsageSnapshot\(nextSnapshot, true\);/,
+  'routine USB payloads must not close setup and partially paint meter rows over it');
 assert.match(firmwareMainSource, /serialRefreshPending = true;[\s\S]*refreshDynamicNow\(\)/,
   'a serial refresh tap must display immediate feedback while waiting for the host');
 assert.match(firmwareMainSource, /else if \(completedSerialRefresh\) requestDynamicRender\(\);/,
@@ -71,10 +77,29 @@ const firmwareUiSource = await fs.readFile(new URL('./firmware/esp32-4848s040/sr
 const firmwareUiHeaderSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/ui.h', import.meta.url), 'utf8');
 const touchBottom = Number(/kUiHeaderTouchBottom = (\d+)/.exec(firmwareUiHeaderSource)?.[1]);
 const touchLeft = Number(/kUiRefreshTouchLeft = (\d+)/.exec(firmwareUiHeaderSource)?.[1]);
-assert.ok(touchBottom >= 53 && touchLeft <= 390,
+assert.ok(touchBottom >= 60 && touchLeft <= 370,
   'the physical refresh target must be substantially larger than its visible glyph');
 assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
   'refresh rendering must use the shared touch-aligned icon position');
+assert.match(firmwareUiSource, /millis\(\) \/ kUiRefreshAnimationFrameMs[\s\S]*phaseDegrees[\s\S]*fillArc\([^;]+phaseDegrees[\s\S]*fillRotatedTriangle/,
+  'the active LCD refresh arrows must rotate as one glyph');
+assert.doesNotMatch(firmwareUiSource, /kOrbit[XY]|fillCircle\(centerX \+ kOrbit/,
+  'the active LCD refresh icon must not use a separate orbiting dot');
+assert.match(firmwareUiHeaderSource, /kUiRefreshAnimationFrameMs = 100;/,
+  'the LCD refresh animation must use the preview-matched frame interval');
+assert.match(firmwareMainSource, /nextRefreshAnimationAt = millis\(\) \+ kUiRefreshAnimationFrameMs;[\s\S]*serviceRefreshAnimation\(\);/,
+  'refresh animation frames must be scheduled while the host request is pending');
+assert.match(firmwareMainSource, /void serviceRefreshAnimation\(\)[\s\S]*uiRefreshHeader/,
+  'refresh animation must publish only the LCD header region');
+const headerLabelBlock = /const char\* headerStateLabel\(UiState state\) \{([\s\S]*?)\n\}/.exec(firmwareUiSource)?.[1];
+assert.ok(headerLabelBlock, 'firmware must define compact labels specifically for the LCD header');
+const headerLabels = [...headerLabelBlock.matchAll(/return "([A-Z.]*)";/g)].map((match) => match[1]);
+assert.ok(headerLabels.length >= 9 && headerLabels.every((label) => label.length <= 4),
+  'every LCD header status must fit within the four-character status slot');
+assert.match(firmwareUiSource, /kHeaderStatusMaxWidth = 24;/,
+  'firmware must enforce the fixed-width LCD header status slot');
+assert.match(firmwareUiSource, /smoothTextWidth\(kSmoothFont11, rawStatus\) <= kHeaderStatusMaxWidth[\s\S]*\? rawStatus[\s\S]*: "ERR";/,
+  'an oversized future LCD header label must fall back before it can overlap freshness');
 assert.match(firmwareUiSource, /display->flush\(\);/,
   'firmware must publish the LCD framebuffer only after composing a complete frame');
 assert.match(firmwareUiSource, /void refreshLimitTime[\s\S]*displayFlushRect\(/,
@@ -89,7 +114,7 @@ assert.match(firmwareDisplaySource, /false \/\* auto_flush \*\//,
 assert.match(firmwareDisplaySource, /void displayFlushRect[\s\S]*Cache_WriteBack_Addr/,
   'partial LCD updates must write back only cache-aligned changed rows');
 assert.match(firmwareDisplaySource,
-  /x = static_cast<int16_t>\(map\(touch\.points\[0\]\.x, 0, 480, 0, gfx->width\(\) - 1\)\);/,
+  /x = static_cast<int16_t>\(map\(touch\.points\[0\]\.x, 480, 0, 0, gfx->width\(\) - 1\)\);/,
   'physical LCD left and right must map to visual left and right');
 assert.match(firmwareDisplaySource,
   /y = static_cast<int16_t>\(map\(touch\.points\[0\]\.y, 480, 0, 0, gfx->height\(\) - 1\)\);/,

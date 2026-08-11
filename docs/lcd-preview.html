@@ -67,16 +67,21 @@
     }
 
     .connection {
+      width: 74px;
       height: 24px;
-      display: flex;
+      display: grid;
+      grid-template-columns: 24px 8px 24px;
       align-items: center;
-      gap: 9px;
+      column-gap: 9px;
+      flex: none;
     }
 
     .freshness {
+      width: 24px;
       height: 24px;
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       color: var(--muted);
       font-size: 11px;
       line-height: 1;
@@ -91,10 +96,32 @@
     }
 
     .transport {
+      width: 24px;
+      overflow: hidden;
       color: var(--ok);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .connection[data-tone="error"] .status-dot {
+      background: var(--hot);
+      box-shadow: 0 0 9px #ff5b5b66;
+    }
+
+    .connection[data-tone="error"] .transport {
+      color: var(--hot);
+    }
+
+    .connection[data-tone="warning"] .status-dot {
+      background: var(--warn);
+      box-shadow: 0 0 9px #ffca3b66;
+    }
+
+    .connection[data-tone="warning"] .transport {
+      color: var(--warn);
     }
 
     .header-icon {
@@ -103,6 +130,16 @@
       display: grid;
       place-items: center;
       color: var(--muted);
+      cursor: pointer;
+    }
+
+    .lcd[data-state="config"] .header-icon[aria-label="Settings"] { color: var(--accent); }
+
+    .header-icon.refreshing { color: var(--accent); }
+    .header-icon.refreshing svg { animation: refresh-spin 800ms linear infinite; }
+
+    @keyframes refresh-spin {
+      to { transform: rotate(360deg); }
     }
 
     .header-icon svg {
@@ -119,6 +156,52 @@
       height: 426px;
       padding: 0 14px 12px;
     }
+
+    .setup-panel {
+      display: none;
+      height: 426px;
+      padding: 10px 14px 80px;
+    }
+
+    .lcd[data-state="config"] main { display: none; }
+    .lcd[data-state="config"] .setup-panel { display: block; }
+
+    .setup-card {
+      height: 336px;
+      padding: 22px 20px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+    }
+
+    .setup-title {
+      margin-bottom: 28px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .setup-label,
+    .setup-copy,
+    .setup-return {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .setup-value {
+      margin: 5px 0 24px;
+      color: var(--accent);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .setup-copy {
+      margin-top: 22px;
+      color: var(--ink);
+    }
+
+    .setup-return { margin-top: 30px; }
 
     .card {
       width: 100%;
@@ -149,6 +232,16 @@
       font-size: 9px;
       letter-spacing: 0.04em;
     }
+
+    .provider-alert {
+      display: none;
+      margin-left: auto;
+      color: var(--hot);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+
+    .lcd[data-state="auth"] .provider-alert { display: inline; }
 
     .meter-row {
       height: 80px;
@@ -265,7 +358,7 @@
   <section class="lcd" aria-label="Proposed 480 by 480 CC Meter LCD interface">
     <header>
       <h1>CC Meter</h1>
-      <span class="connection">
+      <span class="connection" data-tone="ok">
         <span class="freshness">2m</span>
         <span class="status-dot" aria-hidden="true"></span>
         <span class="transport">USB</span>
@@ -288,7 +381,7 @@
 
     <main>
       <section class="card claude">
-        <div class="provider">Claude Code</div>
+        <div class="provider">Claude Code <span class="provider-alert">AUTH</span></div>
 
         <div class="meter-row">
           <div class="metric-head">
@@ -350,6 +443,54 @@
         </div>
       </section>
     </main>
+
+    <section class="setup-panel" aria-label="Optional Wi-Fi setup">
+      <div class="setup-card">
+        <div class="setup-title">OPTIONAL WI-FI SETUP</div>
+        <div class="setup-label">Join the local setup Wi-Fi:</div>
+        <div class="setup-value">CCMeter-Setup-72E0</div>
+        <div class="setup-label">Open this address in a browser:</div>
+        <div class="setup-value">192.168.4.1</div>
+        <div class="setup-copy">Save Wi-Fi, panel URL, and token<br>in the private setup form.</div>
+        <div class="setup-return">Press CFG again to return to USB.</div>
+      </div>
+    </section>
   </section>
+  <script>
+    const lcd = document.querySelector('.lcd');
+    const connection = document.querySelector('.connection');
+    const freshness = document.querySelector('.freshness');
+    const transport = document.querySelector('.transport');
+    const refresh = document.querySelector('[aria-label="Refresh"]');
+    const settings = document.querySelector('[aria-label="Settings"]');
+    const requestedState = new URLSearchParams(location.search).get('state');
+    let state = ['auth', 'config'].includes(requestedState) ? requestedState : 'usb';
+
+    function applyState(nextState) {
+      const headers = {
+        usb: { freshness: '2m', label: 'USB', tone: 'ok' },
+        auth: { freshness: '12m', label: 'AUTH', tone: 'error' },
+        config: { freshness: '2m', label: 'CFG', tone: 'warning' },
+      };
+      state = nextState;
+      const header = headers[state];
+      lcd.dataset.state = state;
+      connection.dataset.tone = header.tone;
+      freshness.textContent = header.freshness;
+      transport.textContent = header.label;
+      connection.setAttribute('aria-label', `${header.freshness} old, ${header.label}`);
+    }
+
+    settings.addEventListener('click', () => applyState(state === 'config' ? 'usb' : 'config'));
+    let refreshTimer;
+    refresh.addEventListener('click', () => {
+      clearTimeout(refreshTimer);
+      refresh.classList.remove('refreshing');
+      void refresh.offsetWidth;
+      refresh.classList.add('refreshing');
+      refreshTimer = setTimeout(() => refresh.classList.remove('refreshing'), 5000);
+    });
+    applyState(state);
+  </script>
 </body>
 </html>

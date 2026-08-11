@@ -41,6 +41,7 @@ uint32_t wifiAttemptStartedAt = 0;
 uint32_t nextPollAt = 0;
 uint32_t lastManualRefreshAt = 0;
 uint32_t serialRefreshRequestedAt = 0;
+uint32_t nextRefreshAnimationAt = 0;
 uint32_t lastSuccessAt = 0;
 uint32_t nextRenderAt = 0;
 bool fullRenderPending = true;
@@ -269,6 +270,7 @@ void performPoll(bool manual) {
   const UiState previousUiState = currentUiState();
   if (manual) lastManualRefreshAt = millis();
   refreshing = true;
+  nextRefreshAnimationAt = millis();
   if (hasSnapshot && !fullRenderPending) refreshDynamicNow();
   else drawNow();
   UsageSnapshot nextSnapshot;
@@ -301,7 +303,6 @@ void processSerialCommand(const char* rawLine) {
       Serial.println(serialInvalidUsageLine());
       return;
     }
-    if (configPortal.active()) configPortal.stop();
     applyUsageSnapshot(nextSnapshot, true);
     Serial.println(serialAckLine());
     return;
@@ -419,8 +420,9 @@ void serviceTouch() {
       serialRefreshPending = true;
       serialRefreshRequestedAt = now;
       refreshing = true;
-      // Turn the glyph green immediately so a physical tap always has visible
-      // feedback while the Windows host performs the authenticated refresh.
+      nextRefreshAnimationAt = now + kUiRefreshAnimationFrameMs;
+      // Start visible motion immediately while the Windows host performs the
+      // authenticated refresh.
       if (hasSnapshot && !fullRenderPending) refreshDynamicNow();
       else drawNow();
     } else {
@@ -429,9 +431,9 @@ void serviceTouch() {
     return;
   }
   if (y <= kUiHeaderTouchBottom && x >= kUiSettingsTouchLeft && x <= kUiSettingsTouchRight) {
-    if (configPortal.active() && deviceConfig.configured()) {
+    if (configPortal.active()) {
       configPortal.stop();
-      beginWifi();
+      if (deviceConfig.configured()) beginWifi();
     } else {
       configPortal.begin(deviceConfig, deviceConfig.configured());
     }
@@ -445,6 +447,12 @@ void serviceSerialRefreshTimeout() {
   serialRefreshPending = false;
   refreshing = false;
   requestDynamicRender();
+}
+
+void serviceRefreshAnimation() {
+  if (!refreshing || fullRenderPending || !due(nextRefreshAnimationAt, millis())) return;
+  uiRefreshHeader(currentUiState(), true, dataAgeMs());
+  nextRefreshAnimationAt = millis() + kUiRefreshAnimationFrameMs;
 }
 
 }  // namespace
@@ -469,6 +477,7 @@ void loop() {
   servicePoll();
   serviceTouch();
   serviceSerialRefreshTimeout();
+  serviceRefreshAnimation();
   if (due(nextRenderAt, millis())) refreshDynamicNow();
   delay(5);
 }

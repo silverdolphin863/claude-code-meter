@@ -15,7 +15,7 @@ The firmware uses the vendor demo wiring without changes:
 - Green pins 8, 20, 3, 46, 9, 10.
 - Blue pins 4, 5, 6, 7, 15.
 - GT911 touch: SDA GPIO 19, SCL GPIO 45, no interrupt or reset pin.
-- Touch mapping keeps the GT911 library's X inversion and applies one additional Y inversion to match this panel's physical orientation.
+- Touch mapping cancels the GT911 library's built-in X and Y inversions so physical touch coordinates match the unmirrored display coordinates.
 
 ## Build and flash
 
@@ -56,7 +56,7 @@ Serial runs at 115200 baud over the CH340 UART0 connection. Native USB CDC is di
 After boot, the firmware emits this compact hello line:
 
 ```json
-{"type":"hello","firmware":"1.0.4","model":"ESP32-4848S040"}
+{"type":"hello","firmware":"1.0.8","model":"ESP32-4848S040"}
 ```
 
 The host sends one panel payload per line by wrapping the normal schema-1 object in a usage envelope. The `data` object is the same object accepted by the Wi-Fi endpoint:
@@ -78,7 +78,8 @@ icon green immediately and the firmware emits:
 {"type":"refresh"}
 ```
 
-The host should answer with a new usage envelope. A manual request that overlaps
+The refresh arrows rotate while the request is pending. The host
+should answer with a new usage envelope. A manual request that overlaps
 a routine USB transfer is queued rather than discarded. The green feedback
 clears when the response arrives, or after 20 seconds if the host does not
 answer. If Wi-Fi fallback credentials exist, the firmware may also request

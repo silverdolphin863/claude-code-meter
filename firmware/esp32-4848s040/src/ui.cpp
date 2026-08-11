@@ -102,14 +102,48 @@ void drawCenteredText(int x, int width, int y, const char* text, uint8_t size, u
   drawFontCenteredText(x, width, y, text, fontForSize(size), color, background);
 }
 
+int16_t roundedFixed256(int32_t value) {
+  return static_cast<int16_t>((value + (value >= 0 ? 128 : -128)) / 256);
+}
+
+void rotateIconPoint(int centerX, int centerY, int8_t offsetX, int8_t offsetY, uint8_t phase,
+                     int16_t& x, int16_t& y) {
+  constexpr int16_t kCos256[8] = {256, 181, 0, -181, -256, -181, 0, 181};
+  constexpr int16_t kSin256[8] = {0, 181, 256, 181, 0, -181, -256, -181};
+  const int16_t cosine = kCos256[phase % 8];
+  const int16_t sine = kSin256[phase % 8];
+  x = centerX + roundedFixed256(static_cast<int32_t>(offsetX) * cosine -
+                                static_cast<int32_t>(offsetY) * sine);
+  y = centerY + roundedFixed256(static_cast<int32_t>(offsetX) * sine +
+                                static_cast<int32_t>(offsetY) * cosine);
+}
+
+void fillRotatedTriangle(int centerX, int centerY, uint8_t phase,
+                         int8_t x1Offset, int8_t y1Offset,
+                         int8_t x2Offset, int8_t y2Offset,
+                         int8_t x3Offset, int8_t y3Offset, uint16_t color) {
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  int16_t x2 = 0;
+  int16_t y2 = 0;
+  int16_t x3 = 0;
+  int16_t y3 = 0;
+  rotateIconPoint(centerX, centerY, x1Offset, y1Offset, phase, x1, y1);
+  rotateIconPoint(centerX, centerY, x2Offset, y2Offset, phase, x2, y2);
+  rotateIconPoint(centerX, centerY, x3Offset, y3Offset, phase, x3, y3);
+  canvas()->fillTriangle(x1, y1, x2, y2, x3, y3, color);
+}
+
 void drawRefreshIcon(int centerX, int centerY, bool active) {
   const uint16_t color = active ? kAccent : kMuted;
-  canvas()->fillArc(centerX, centerY, 9, 8, 205, 350, color);
-  canvas()->fillArc(centerX, centerY, 9, 8, 25, 170, color);
-  canvas()->fillTriangle(centerX - 9, centerY - 4, centerX - 9, centerY - 9,
-                         centerX - 4, centerY - 4, color);
-  canvas()->fillTriangle(centerX + 9, centerY + 4, centerX + 9, centerY + 9,
-                         centerX + 4, centerY + 4, color);
+  const uint8_t phase = active
+      ? static_cast<uint8_t>((millis() / kUiRefreshAnimationFrameMs) % 8)
+      : 0;
+  const float phaseDegrees = static_cast<float>(phase * 45);
+  canvas()->fillArc(centerX, centerY, 9, 8, 205.0f + phaseDegrees, 350.0f + phaseDegrees, color);
+  canvas()->fillArc(centerX, centerY, 9, 8, 25.0f + phaseDegrees, 170.0f + phaseDegrees, color);
+  fillRotatedTriangle(centerX, centerY, phase, -9, -4, -9, -9, -4, -4, color);
+  fillRotatedTriangle(centerX, centerY, phase, 9, 4, 9, 9, 4, 4, color);
 }
 
 void drawSettingsIcon(int centerX, int centerY, bool active) {
@@ -144,6 +178,20 @@ const char* stateLabel(UiState state) {
   return "UNKNOWN";
 }
 
+const char* headerStateLabel(UiState state) {
+  switch (state) {
+    case UiState::Setup: return "WAIT";
+    case UiState::ConfigPortal: return "CFG";
+    case UiState::Connecting: return "LINK";
+    case UiState::Online: return "WIFI";
+    case UiState::SerialOnline: return "USB";
+    case UiState::Stale: return "OLD";
+    case UiState::Offline: return "OFF";
+    case UiState::AuthenticationError: return "AUTH";
+  }
+  return "ERR";
+}
+
 UsageTone stateTone(UiState state) {
   switch (state) {
     case UiState::Online:
@@ -159,11 +207,16 @@ UsageTone stateTone(UiState state) {
 }
 
 void drawHeaderDynamic(UiState state, bool refreshing, uint64_t dataAgeMs) {
+  constexpr int kHeaderStatusMaxWidth = 24;
   char age[16] = {};
   formatAge(dataAgeMs, age, sizeof(age));
   drawFontRightText(341, 20, age, kSmoothFont11, kMuted, kBackground);
   canvas()->fillCircle(354, 27, 4, toneColor(stateTone(state)));
-  drawFontRightText(393, 20, state == UiState::SerialOnline ? "USB" : stateLabel(state),
+  const char* rawStatus = headerStateLabel(state);
+  const char* status = smoothTextWidth(kSmoothFont11, rawStatus) <= kHeaderStatusMaxWidth
+      ? rawStatus
+      : "ERR";
+  drawFontRightText(393, 20, status,
                     kSmoothFont11, toneColor(stateTone(state)), kBackground);
   drawRefreshIcon(kUiRefreshIconCenterX, 27, refreshing);
   drawSettingsIcon(kUiSettingsIconCenterX, 27, state == UiState::ConfigPortal);
@@ -436,8 +489,7 @@ void drawSection(const UsageSection* source, const char* fallbackId, int y, int 
   }
 }
 
-void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refreshing,
-                      uint64_t nowEpochMs, uint64_t dataAgeMs, bool snapshotValuesChanged) {
+void refreshHeaderRegion(UiState state, bool refreshing, uint64_t dataAgeMs) {
   constexpr int kHeaderDynamicLeft = 276;
   constexpr int kHeaderDynamicTop = 14;
   constexpr int kHeaderDynamicWidth = 190;
@@ -447,6 +499,11 @@ void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refresh
   drawHeaderDynamic(state, refreshing, dataAgeMs);
   displayFlushRect(kHeaderDynamicLeft, kHeaderDynamicTop,
                    kHeaderDynamicWidth, kHeaderDynamicHeight);
+}
+
+void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refreshing,
+                      uint64_t nowEpochMs, uint64_t dataAgeMs, bool snapshotValuesChanged) {
+  refreshHeaderRegion(state, refreshing, dataAgeMs);
 
   if (!snapshot || !snapshot->valid || state == UiState::Setup || state == UiState::ConfigPortal) return;
 
@@ -506,6 +563,10 @@ void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refresh
 void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refreshing,
                        uint64_t nowEpochMs, uint64_t dataAgeMs) {
   refreshUiRegions(snapshot, state, refreshing, nowEpochMs, dataAgeMs, true);
+}
+
+void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs) {
+  refreshHeaderRegion(state, refreshing, dataAgeMs);
 }
 
 }  // namespace ccmeter

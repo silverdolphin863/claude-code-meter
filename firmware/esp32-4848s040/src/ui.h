@@ -8,11 +8,12 @@ constexpr int kUiRefreshIconCenterX = 418;
 constexpr int kUiSettingsIconCenterX = 452;
 // Finger targets are deliberately larger than the 18 px glyphs. The cards
 // begin below this header zone, and the midpoint keeps refresh/settings apart.
-constexpr int kUiHeaderTouchBottom = 53;
-constexpr int kUiRefreshTouchLeft = 388;
+constexpr int kUiHeaderTouchBottom = 64;
+constexpr int kUiRefreshTouchLeft = 360;
 constexpr int kUiRefreshTouchRight = 438;
 constexpr int kUiSettingsTouchLeft = 438;
 constexpr int kUiSettingsTouchRight = 479;
+constexpr uint32_t kUiRefreshAnimationFrameMs = 100;
 
 static_assert(kUiRefreshTouchLeft < kUiRefreshIconCenterX &&
               kUiRefreshIconCenterX < kUiRefreshTouchRight);
@@ -37,5 +38,6 @@ void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refresh
                       uint64_t nowEpochMs, uint64_t dataAgeMs);
 void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refreshing,
                        uint64_t nowEpochMs, uint64_t dataAgeMs);
+void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs);
 
 }  // namespace ccmeter
