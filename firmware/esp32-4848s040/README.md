@@ -2,6 +2,34 @@
 
 This is the CC Meter-only firmware for the JCZN/Guition ESP32-4848S040 display. It replaces the vendor weather, clock, and light-control screen with the expanded CC Meter view: Claude Code and Codex cards, usage bars, percentages, pace badges, reset countdowns, freshness, and explicit setup or failure states.
 
+![Physical ESP32-4848S040 display running CC Meter](../../docs/lcd-hardware.png)
+
+<p align="center">
+  <a href="../../docs/lcd-preview.png"><img src="../../docs/lcd-preview.png" width="480" alt="Exact current 480x480 CC Meter LCD interface"></a>
+</p>
+
+<p align="center"><sub>Exact current interface at the panel's native 480x480 resolution.</sub></p>
+
+The normal Windows installer never flashes the display. Firmware is published
+as a separate `CCMeter-LCD-Firmware-x.y.z.zip` release asset so the hardware
+step stays explicit and recoverable.
+
+## Install a release build
+
+1. Install the matching CC Meter Windows release.
+2. Download and extract its matching LCD firmware ZIP.
+3. Open the included `SETUP.html` guide.
+4. Connect the square 480x480 `ESP32-4848S040` panel directly by USB.
+5. Run the validation command first. The installer will verify the image and
+   selected CH340 port without changing the display.
+6. Run the flash command only after validation. The script saves and verifies
+   a complete 16 MB factory backup before it writes CC Meter.
+7. In CC Meter, enable **Settings -> Hardware display** and leave the transport
+   set to **USB**.
+
+Keep the generated factory backup. It is specific to the exact display that
+was connected when the installer ran.
+
 ## Hardware
 
 The firmware uses the vendor demo wiring without changes:

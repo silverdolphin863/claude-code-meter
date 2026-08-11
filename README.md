@@ -47,6 +47,21 @@ CC Meter can drive the JCZN/Guition `ESP32-4848S040` 4-inch 480x480 touch
 display with a dedicated firmware image. The factory weather, clock, and
 lighting interface is replaced completely by the expanded CC Meter dashboard.
 
+<p align="center">
+  <img src="docs/lcd-hardware.png" width="900" alt="Physical ESP32-4848S040 display running CC Meter over USB">
+</p>
+
+<p align="center"><sub>The physical 480x480 panel running Claude Code and Codex meters over USB.</sub></p>
+
+<p align="center">
+  <a href="docs/lcd-preview.png"><img src="docs/lcd-preview.png" width="480" alt="Exact 480x480 CC Meter LCD interface"></a>
+</p>
+
+<p align="center"><sub>Exact current 480x480 interface. Click for the native-size render.</sub></p>
+
+The test board cost CHF 21.39 with shipping from AliExpress. Seller prices and
+hardware revisions vary, and this project does not sell or bundle the display.
+
 USB is the default connection. The same cable powers the screen, carries live
 usage, and handles touch-triggered refreshes. The app detects the board's CH340
 serial interface automatically, so no Wi-Fi credentials or router changes are
@@ -64,6 +79,19 @@ display. LCD firmware builds as a separate optional
 Its installation script first saves a complete 16 MB factory-firmware backup,
 then writes the CC Meter image. This add-on is only for the 480x480
 `ESP32-4848S040` board.
+
+### Hardware quick start
+
+1. Install the matching CC Meter Windows release.
+2. Download and extract the matching `CCMeter-LCD-Firmware-x.y.z.zip` asset.
+3. Connect the square `ESP32-4848S040` panel directly by USB.
+4. Open PowerShell in the extracted folder and run the validation command from
+   `SETUP.html` before flashing.
+5. After flashing, enable **Settings -> Hardware display -> USB** in CC Meter.
+
+The firmware ZIP includes the full offline setup guide, checksum validation,
+automatic CH340 port detection, and a flashing script that refuses to continue
+unless it has first saved a complete 16 MB factory backup.
 
 ## Install
 
@@ -152,6 +180,27 @@ and the screen-edge dock are Windows-shaped.
 - Updates are checked only when you ask. The tray menu has
   **Check for updates...**; nothing checks, downloads, or installs on its own,
   and there is no launch-time nag.
+
+## Related projects
+
+CC Meter is not the first physical AI usage display. These projects overlap
+with it in useful ways:
+
+- [TokenMonitor](https://tokenmonitor.dev/) is a polished 4-inch, 480x480
+  Claude Code, Codex, and Antigravity display with a Wi-Fi broker and a planned
+  pre-flashed Kickstarter product.
+- [Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) is a mature
+  Claude Code display with Bluetooth transport, several supported ESP32
+  boards, and Windows, macOS, and Linux host support.
+- [TokenMeter](https://github.com/alestanalves/TokenMeter) uses a Windows
+  bridge and a low-cost 2.8-inch ESP32 touch display for local Claude Code and
+  Codex data.
+- [codeMeter](https://encinitas3d.com/product/codemeter-a-desk-display-for-your-claude-code-usage/)
+  is a pre-built, standalone Wi-Fi product for Claude Code usage.
+
+This project's narrower lane is the low-cost square Guition panel, a single
+USB cable for power, live data, and touch refresh, no provider credentials on
+the display, and one Windows app that also supplies the desktop and tray meter.
 
 ## License
 
