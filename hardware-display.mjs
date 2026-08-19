@@ -2,6 +2,15 @@ import { spawn } from 'node:child_process';
 
 const POLL_MS = 30_000;
 const RESTART_MS = 5_000;
+// The board is busiest right after the port opens (it may still be booting or
+// painting its first screen) and drops serial bytes while it is. Let it settle
+// before the first transfer instead of racing it.
+const FIRST_SEND_MS = 1_500;
+// A rejected payload is almost always a corrupted transfer, so resend rather
+// than leaving a blank display until the next poll. Bounded, to avoid a loop
+// against a board that genuinely disagrees with our format.
+const REJECT_RETRY_MS = 2_000;
+const MAX_REJECT_RETRIES = 3;
 
 export function encodeHardwareUsage(data) {
   return JSON.stringify({ type: 'usage', data });
@@ -30,6 +39,9 @@ export class HardwareDisplayController {
     this.sending = false;
     this.sendingManual = false;
     this.pendingManual = false;
+    this.firstSendTimer = null;
+    this.retryTimer = null;
+    this.rejectRetries = 0;
     this.state = {
       transport: 'usb',
       connected: false,
@@ -109,7 +121,11 @@ export class HardwareDisplayController {
     child.once('exit', () => {
       if (this.child === child) this.child = null;
       clearInterval(this.pollTimer);
+      clearTimeout(this.firstSendTimer);
+      clearTimeout(this.retryTimer);
       this.pollTimer = null;
+      this.firstSendTimer = null;
+      this.retryTimer = null;
       this.emit({ connected: false, deviceSeen: false, serialPort: null });
       if (!child.ccmeterIntentionalStop && this.config.enabled && this.config.transport === 'usb') {
         this.restartTimer = setTimeout(() => this.start(), RESTART_MS);
@@ -127,7 +143,13 @@ export class HardwareDisplayController {
       if (line.startsWith('READY ')) {
         const serialPort = line.slice(6).trim();
         this.emit({ connected: true, serialPort, error: null });
-        this.sendUsage(false);
+        this.rejectRetries = 0;
+        clearTimeout(this.firstSendTimer);
+        this.firstSendTimer = setTimeout(() => {
+          this.firstSendTimer = null;
+          this.sendUsage(false);
+        }, FIRST_SEND_MS);
+        this.firstSendTimer.unref?.();
         clearInterval(this.pollTimer);
         this.pollTimer = setInterval(() => this.sendUsage(false), POLL_MS);
         continue;
@@ -142,13 +164,38 @@ export class HardwareDisplayController {
           model: typeof message.model === 'string' ? message.model.slice(0, 48) : null,
         });
       } else if (message.type === 'ack') {
+        this.rejectRetries = 0;
         this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
+      } else if (message.type === 'error') {
+        // The board answers a payload it could not parse. Dropping that reply
+        // silently was why a rejected update looked exactly like an unplugged
+        // cable: the reply is itself proof the device is present and talking,
+        // so it counts as having seen the device, and it is worth resending.
+        const detail = String(message.error || 'display error').slice(0, 64);
+        this.emit({
+          deviceSeen: true,
+          lastSeen: new Date().toISOString(),
+          error: detail === 'invalid_usage'
+            ? 'Display rejected the update, resending'
+            : 'Display error: ' + detail,
+        });
+        this.retryAfterReject();
       } else if (message.type === 'refresh') {
         this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
         this.sendUsage(true);
       }
     }
     if (this.stdout.length > 8192) this.stdout = '';
+  }
+
+  retryAfterReject() {
+    if (this.retryTimer || this.rejectRetries >= MAX_REJECT_RETRIES) return;
+    this.rejectRetries += 1;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.sendUsage(false);
+    }, REJECT_RETRY_MS);
+    this.retryTimer.unref?.();
   }
 
   async sendUsage(manual) {
@@ -182,8 +229,12 @@ export class HardwareDisplayController {
   stop() {
     clearTimeout(this.restartTimer);
     clearInterval(this.pollTimer);
+    clearTimeout(this.firstSendTimer);
+    clearTimeout(this.retryTimer);
     this.restartTimer = null;
     this.pollTimer = null;
+    this.firstSendTimer = null;
+    this.retryTimer = null;
     this.pendingManual = false;
     const child = this.child;
     this.child = null;

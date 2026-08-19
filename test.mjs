@@ -47,6 +47,36 @@ assert.equal(encodeHardwareUsage({ schema: 1 }), '{"type":"usage","data":{"schem
   assert.deepEqual(calls, [false, true], 'a tap during a periodic send must be replayed as manual');
   assert.equal(writes.length, 2, 'both the periodic payload and queued manual payload must reach USB');
 }
+const NEWLINE = String.fromCharCode(10);
+{
+  // The board answers an unparseable payload with {"type":"error"}. That reply
+  // used to be parsed and then dropped, so a corrupted transfer was
+  // indistinguishable from an unplugged cable: the panel stayed blank and the
+  // app reported nothing at all. The reply proves the device is talking.
+  const writes = [];
+  const states = [];
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async () => ({ schema: 1 }),
+    onChange: (state) => states.push(state),
+  });
+  controller.child = { stdin: { writable: true, write: (line) => writes.push(line) } };
+
+  controller.consumeStdout('{"type":"error","error":"invalid_usage"}' + NEWLINE);
+  const afterReject = states.at(-1);
+  assert.equal(afterReject.deviceSeen, true, 'an error reply proves the display is present');
+  assert.match(afterReject.error, /rejected/i, 'a rejected update must be surfaced, not swallowed');
+
+  // It must resend rather than leave the panel blank until the next poll.
+  await new Promise((resolve) => setTimeout(resolve, 2400));
+  assert.equal(writes.length, 1, 'a rejected update must be resent');
+
+  // A later ack clears the error and restores the retry budget.
+  controller.consumeStdout('{"type":"ack"}' + NEWLINE);
+  assert.equal(controller.rejectRetries, 0, 'an ack must reset the retry budget');
+  assert.equal(states.at(-1).error, null, 'an ack must clear the rejection notice');
+  controller.stop();
+}
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
