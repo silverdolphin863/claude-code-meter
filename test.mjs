@@ -77,6 +77,15 @@ const NEWLINE = String.fromCharCode(10);
   assert.equal(states.at(-1).error, null, 'an ack must clear the rejection notice');
   controller.stop();
 }
+const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
+// A window whose reset time has passed is dropped rather than shown with the
+// previous window's percentage. On the plain 10 minute cadence that left the
+// gauge missing for most of that window, which reads as "no data" on both the
+// widget and the hardware panel. A visibly reset window must shorten the wait.
+assert.match(serverSource, /cacheHasExpiredWindow\(\) \? EXPIRED_WINDOW_REFRESH_MS : REFRESH_TTL_MS/,
+  'a reset window must refresh sooner than the normal cadence');
+assert.match(serverSource, /EXPIRED_WINDOW_REFRESH_MS = 120_000/,
+  'the shortened refresh must keep a floor so clock skew cannot cause a poll loop');
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');

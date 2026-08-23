@@ -212,6 +212,25 @@ function cacheMtime() {
   try { return fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { return 0; }
 }
 
+// A window whose reset time has passed carries a percentage from the window
+// before it, so it gets dropped rather than shown as if it were current. That
+// leaves a hole in the display until the next refresh, and on the normal 10
+// minute cadence the gauge can be missing for most of that. Treat a visibly
+// reset window as a reason to refresh sooner, with a floor so a server clock
+// skew cannot turn this into a poll loop.
+const EXPIRED_WINDOW_REFRESH_MS = 120_000;
+
+function cacheHasExpiredWindow() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CLAUDE_CACHE, 'utf8'));
+    const now = Date.now();
+    return (raw.limits || []).some((limit) => limit.resets_at &&
+      new Date(limit.resets_at).getTime() <= now);
+  } catch {
+    return false;
+  }
+}
+
 function hasNewReadableCache() {
   if (cacheMtime() <= blockedCacheMtimeMs) return false;
   try {
@@ -301,7 +320,8 @@ async function refreshClaudeUsage(force = false) {
 
   let age = Infinity;
   try { age = Date.now() - fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { /* no cache yet */ }
-  if (!force && age < REFRESH_TTL_MS) return;
+  const minAge = cacheHasExpiredWindow() ? EXPIRED_WINDOW_REFRESH_MS : REFRESH_TTL_MS;
+  if (!force && age < minAge) return;
   lastRefreshAttemptAt = Date.now();
 
   let token;
