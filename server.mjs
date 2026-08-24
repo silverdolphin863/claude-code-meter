@@ -680,7 +680,7 @@ function codexSectionFromLogs() {
   return out;
 }
 
-async function codexSection(forceLive = false) {
+async function codexSection(forceLive = false, allowWait = false) {
   // Never block the response on a cold live query. Spawning the Codex
   // app-server takes seconds, and because this payload carries BOTH tools, an
   // await here left the whole widget blank on startup, Claude included, for as
@@ -691,9 +691,28 @@ async function codexSection(forceLive = false) {
   // wait cursor), and a warm cache is used as before. A cold cache starts the
   // query in the background and answers from the session logs right now; the
   // live numbers land on the next poll a few seconds later.
-  const canWait = forceLive || codexLiveCache.snapshot;
+  //
+  // The hardware panel is the exception: it is fed once on connect and then
+  // only every 30 seconds, so a cold-start answer sticks on the glass. The
+  // session-log fallback is derived from older Codex formats and can describe
+  // windows the current plan no longer has (a Pro account reports one weekly
+  // window, yet old logs still carry a 5-hour one), so the panel waits for the
+  // live snapshot rather than painting a window that does not exist.
+  const canWait = forceLive || allowWait || codexLiveCache.snapshot;
   const live = canWait ? await liveCodexSnapshot(forceLive) : null;
-  if (!canWait) liveCodexSnapshot(false); // fire and forget, it caches itself
+  if (!canWait) {
+    liveCodexSnapshot(false); // fire and forget, it caches itself
+    // While that first query is in flight, report no windows rather than the
+    // log-derived ones. A missing gauge for one second is honest; a gauge for a
+    // window the plan does not have is not, and the logs still describe a
+    // 5-hour Codex window that a Pro account no longer reports.
+    if (codexLaunch() && !codexLiveCache.error) {
+      return {
+        id: 'codex', name: 'Codex', installed: true, limits: [],
+        stale_ms: null, error: null, source: 'pending',
+      };
+    }
+  }
   if (live) return codexSectionFromLive(live);
 
   const fallback = codexSectionFromLogs();
@@ -702,10 +721,10 @@ async function codexSection(forceLive = false) {
   return fallback;
 }
 
-async function payload(forceCodex = false) {
+async function payload(forceCodex = false, allowCodexWait = false) {
   return {
     generated_at: new Date().toISOString(),
-    sections: [claudeSection(), await codexSection(forceCodex)],
+    sections: [claudeSection(), await codexSection(forceCodex, allowCodexWait)],
   };
 }
 
@@ -762,7 +781,7 @@ function panelPayload(data) {
 async function getPanelUsage(manual = false) {
   if (manual) await refreshClaudeUsage(true);
   else refreshClaudeUsage();
-  return panelPayload(await payload(manual));
+  return panelPayload(await payload(manual, true));
 }
 
 async function handlePanelRequest(req, res) {

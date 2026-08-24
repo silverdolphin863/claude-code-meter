@@ -86,6 +86,15 @@ assert.match(serverSource, /cacheHasExpiredWindow\(\) \? EXPIRED_WINDOW_REFRESH_
   'a reset window must refresh sooner than the normal cadence');
 assert.match(serverSource, /EXPIRED_WINDOW_REFRESH_MS = 120_000/,
   'the shortened refresh must keep a floor so clock skew cannot cause a poll loop');
+// The session-log fallback is derived from older Codex formats and can describe
+// windows the current plan no longer has: a Pro account reports a single weekly
+// window, while old logs still carry a 5-hour one. The widget re-polls every ten
+// seconds and corrects itself, but the panel is fed once on connect and then
+// every thirty seconds, so a wrong row sticks on the glass. It must wait for live data.
+assert.match(serverSource, /panelPayload\(await payload\(manual, true\)\)/,
+  'the hardware panel must wait for the live Codex snapshot rather than painting log-derived windows');
+assert.match(serverSource, /const canWait = forceLive \|\| allowWait \|\| codexLiveCache\.snapshot;/,
+  'codexSection must support waiting for live data without forcing a Claude API refresh');
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
