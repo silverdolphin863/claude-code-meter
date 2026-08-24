@@ -1,6 +1,13 @@
 import { spawn } from 'node:child_process';
 
-const POLL_MS = 30_000;
+// Match the widget's cadence. At 30s the panel sat up to half a minute behind
+// the widget, which is how a percentage that ticks upward while you work shows
+// up as a persistent one-point gap between the two screens.
+const POLL_MS = 10_000;
+// Polling that often does not mean writing that often: an unchanged payload is
+// not sent. The heartbeat resends anyway so the link keeps proving itself and
+// the board's own staleness timer (15 minutes) never trips on a quiet account.
+const HEARTBEAT_MS = 60_000;
 const RESTART_MS = 5_000;
 // The board is busiest right after the port opens (it may still be booting or
 // painting its first screen) and drops serial bytes while it is. Let it settle
@@ -14,6 +21,19 @@ const MAX_REJECT_RETRIES = 3;
 
 export function encodeHardwareUsage(data) {
   return JSON.stringify({ type: 'usage', data });
+}
+
+// Fields that differ on every build of the payload and are not worth a serial
+// write: the clock stamps, the cache age, and the human reset label, which the
+// board recomputes locally from resets_at every minute anyway.
+const VOLATILE = new Set(['server_time_ms', 'generated_at', 'stale_ms', 'reset_label']);
+
+export function usageContentKey(data) {
+  try {
+    return JSON.stringify(data, (key, value) => (VOLATILE.has(key) ? undefined : value));
+  } catch {
+    return null;
+  }
 }
 
 export function parseHardwareMessage(line) {
@@ -42,6 +62,8 @@ export class HardwareDisplayController {
     this.firstSendTimer = null;
     this.retryTimer = null;
     this.rejectRetries = 0;
+    this.lastKey = null;
+    this.lastWriteAt = 0;
     this.state = {
       transport: 'usb',
       connected: false,
@@ -191,6 +213,9 @@ export class HardwareDisplayController {
   retryAfterReject() {
     if (this.retryTimer || this.rejectRetries >= MAX_REJECT_RETRIES) return;
     this.rejectRetries += 1;
+    // The board never received that payload intact, so change detection must
+    // not treat its contents as already delivered.
+    this.lastKey = null;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       this.sendUsage(false);
@@ -212,8 +237,15 @@ export class HardwareDisplayController {
     let replayManual = false;
     try {
       const data = await this.loadUsage(manual);
+      const key = usageContentKey(data);
+      const unchanged = key !== null && key === this.lastKey;
+      const beating = Date.now() - this.lastWriteAt >= HEARTBEAT_MS;
+      // Nothing the panel would draw differently, so spend no serial time on it.
+      if (unchanged && !manual && !beating) return;
       const line = encodeHardwareUsage(data) + '\n';
       this.child.stdin.write(line);
+      this.lastKey = key;
+      this.lastWriteAt = Date.now();
       this.emit({ lastSent: new Date().toISOString(), error: null });
     } catch {
       this.emit({ error: 'Usage data unavailable' });

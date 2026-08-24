@@ -680,7 +680,7 @@ function codexSectionFromLogs() {
   return out;
 }
 
-async function codexSection(forceLive = false, allowWait = false) {
+async function codexSection(forceLive = false) {
   // Never block the response on a cold live query. Spawning the Codex
   // app-server takes seconds, and because this payload carries BOTH tools, an
   // await here left the whole widget blank on startup, Claude included, for as
@@ -692,13 +692,12 @@ async function codexSection(forceLive = false, allowWait = false) {
   // query in the background and answers from the session logs right now; the
   // live numbers land on the next poll a few seconds later.
   //
-  // The hardware panel is the exception: it is fed once on connect and then
-  // only every 30 seconds, so a cold-start answer sticks on the glass. The
-  // session-log fallback is derived from older Codex formats and can describe
-  // windows the current plan no longer has (a Pro account reports one weekly
-  // window, yet old logs still carry a 5-hour one), so the panel waits for the
-  // live snapshot rather than painting a window that does not exist.
-  const canWait = forceLive || allowWait || codexLiveCache.snapshot;
+  // Waiting here was tried for the hardware panel and made its first update
+  // arrive 23 seconds after connecting, because a cold Codex app-server can
+  // take that long. Reporting no Codex windows until the live answer lands is
+  // both faster and honest, and the panel picks the real numbers up on its next
+  // check a few seconds later.
+  const canWait = forceLive || codexLiveCache.snapshot;
   const live = canWait ? await liveCodexSnapshot(forceLive) : null;
   if (!canWait) {
     liveCodexSnapshot(false); // fire and forget, it caches itself
@@ -721,10 +720,10 @@ async function codexSection(forceLive = false, allowWait = false) {
   return fallback;
 }
 
-async function payload(forceCodex = false, allowCodexWait = false) {
+async function payload(forceCodex = false) {
   return {
     generated_at: new Date().toISOString(),
-    sections: [claudeSection(), await codexSection(forceCodex, allowCodexWait)],
+    sections: [claudeSection(), await codexSection(forceCodex)],
   };
 }
 
@@ -781,7 +780,7 @@ function panelPayload(data) {
 async function getPanelUsage(manual = false) {
   if (manual) await refreshClaudeUsage(true);
   else refreshClaudeUsage();
-  return panelPayload(await payload(manual, true));
+  return panelPayload(await payload(manual));
 }
 
 async function handlePanelRequest(req, res) {

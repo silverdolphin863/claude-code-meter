@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { constrainCompactBounds } from './window-geometry.mjs';
-import { HardwareDisplayController, encodeHardwareUsage, parseHardwareMessage } from './hardware-display.mjs';
+import { HardwareDisplayController, encodeHardwareUsage, parseHardwareMessage, usageContentKey } from './hardware-display.mjs';
 
 const workArea = { x: 100, y: 40, width: 1920, height: 1040 };
 assert.deepEqual(
@@ -77,6 +77,52 @@ const NEWLINE = String.fromCharCode(10);
   assert.equal(states.at(-1).error, null, 'an ack must clear the rejection notice');
   controller.stop();
 }
+{
+  // The panel used to be written every 30 seconds regardless of whether anything
+  // had changed, which left it up to half a minute behind the widget. It now
+  // checks at the widget's cadence and writes only when the panel would actually
+  // draw something different. Timestamps and the cache age must not count as a
+  // change, or every check would write and nothing would be saved.
+  const writes = [];
+  let current = { server_time_ms: 1, generated_at: 'a', sections: [
+    { id: 'claude', name: 'Claude Code', stale_ms: 10, limits: [{ label: 'Weekly, all models', percent: 91, reset_label: 'in 2h' }] },
+  ] };
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async () => current,
+  });
+  controller.child = { stdin: { writable: true, write: (line) => writes.push(line) } };
+
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 1, 'the first payload must always be written');
+
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 1, 'an unchanged payload must not be written again');
+
+  current = { ...current, server_time_ms: 2, generated_at: 'b',
+    sections: [{ ...current.sections[0], stale_ms: 999,
+      limits: [{ ...current.sections[0].limits[0], reset_label: 'in 1h' }] }] };
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 1, 'clock stamps, cache age and the reset label must not count as a change');
+
+  current = { ...current, sections: [{ ...current.sections[0],
+    limits: [{ ...current.sections[0].limits[0], percent: 92 }] }] };
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 2, 'a changed percentage must reach the panel');
+
+  await controller.sendUsage(true);
+  assert.equal(writes.length, 3, 'a refresh tap must always be answered, even with unchanged data');
+
+  // A rejected payload never arrived, so it must not be suppressed as a duplicate.
+  controller.retryAfterReject();
+  assert.equal(controller.lastKey, null, 'a rejection must clear the delivered-content marker');
+  controller.stop();
+}
+assert.equal(
+  usageContentKey({ server_time_ms: 1, x: 5 }),
+  usageContentKey({ server_time_ms: 2, x: 5 }),
+  'the content key must ignore volatile fields',
+);
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
 // A window whose reset time has passed is dropped rather than shown with the
 // previous window's percentage. On the plain 10 minute cadence that left the
@@ -91,10 +137,10 @@ assert.match(serverSource, /EXPIRED_WINDOW_REFRESH_MS = 120_000/,
 // window, while old logs still carry a 5-hour one. The widget re-polls every ten
 // seconds and corrects itself, but the panel is fed once on connect and then
 // every thirty seconds, so a wrong row sticks on the glass. It must wait for live data.
-assert.match(serverSource, /panelPayload\(await payload\(manual, true\)\)/,
-  'the hardware panel must wait for the live Codex snapshot rather than painting log-derived windows');
-assert.match(serverSource, /const canWait = forceLive \|\| allowWait \|\| codexLiveCache\.snapshot;/,
-  'codexSection must support waiting for live data without forcing a Claude API refresh');
+assert.match(serverSource, /source: 'pending'/,
+  'a cold Codex cache must report no windows rather than log-derived ones the plan may not have');
+assert.doesNotMatch(serverSource, /payload\(manual, true\)/,
+  'the panel must not block on a cold Codex query: it delayed the first panel update by 23 seconds');
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
