@@ -418,6 +418,11 @@ function claudeSection() {
   }
   if (authRequired) out.refresh_error = 'auth_required';
   else if (lastRefreshError && out.stale_ms >= REFRESH_TTL_MS) out.refresh_error = lastRefreshError;
+  // When the API has us locked out, the UI needs the release time, not just the
+  // error string: a refresh click during the lockout is refused on purpose (one
+  // call into a live 429 window restarts it), and refusing without saying when
+  // it becomes worth clicking again reads as a broken button.
+  if (nextAllowedAt > Date.now()) out.refresh_blocked_until = nextAllowedAt;
   return out;
 }
 

@@ -566,7 +566,19 @@ function render() {
   const fmtAge = (s) => s < 60 ? 'under 1m' : s < 3600 ? Math.round(s / 60) + 'm'
                                                        : Math.round(s / 3600) + 'h';
   // Always label it. A bare coloured circle explains nothing on its own.
-  const txt = dataAge < 60 ? '<1m' : fmtAge(dataAge);
+  // A rate-limit lockout gets named on the strip itself with its release time.
+  // It used to live only in the hover tooltip, so a refresh click during a
+  // lockout looked like a button that simply did nothing.
+  const blocked = visibleSections()
+    .map((s) => s.refresh_blocked_until)
+    .filter((t) => typeof t === 'number' && t > Date.now())
+    .sort((a, b) => b - a)[0];
+  let txt = dataAge < 60 ? '<1m' : fmtAge(dataAge);
+  if (blocked) {
+    const at = new Date(blocked);
+    txt += ' · rate-limited, retry ' + String(at.getHours()).padStart(2, '0') +
+           ':' + String(at.getMinutes()).padStart(2, '0');
+  }
   setText('age', txt);
   setText('age2', txt);
 
