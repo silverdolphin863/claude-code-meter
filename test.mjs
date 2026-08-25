@@ -295,9 +295,23 @@ input.on('line', (line) => {
   }
 });
 `);
-const port = 17373 + Math.floor(Math.random() * 1000);
-const mockPort = 19373 + Math.floor(Math.random() * 1000);
-const panelPort = 21373 + Math.floor(Math.random() * 1000);
+// Ports come from the OS, not from Math.random over a fixed range: a random
+// pick landed on a port something else was already listening on and failed the
+// whole suite with EADDRINUSE. Binding to port 0 asks the kernel for a port
+// that is actually free right now.
+async function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = http.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const assigned = probe.address().port;
+      probe.close(() => resolve(assigned));
+    });
+  });
+}
+const port = await freePort();
+const mockPort = await freePort();
+const panelPort = await freePort();
 const panelToken = 'test-panel-token-0123456789';
 let mockAuthorized = false;
 let mockRequests = 0;
@@ -460,7 +474,9 @@ try {
   await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
   assert.equal(mockRequests, 3, 'successful manual refreshes must keep the click cooldown');
 
-  const fallbackPort = port + 2000;
+  // Asking the OS, like the other three ports: the old port + 2000 guess
+  // landed on busy ports and failed the suite with a server that never bound.
+  const fallbackPort = await freePort();
   fallbackChild = spawn(process.execPath, ['server.mjs'], {
     cwd: new URL('.', import.meta.url),
     env: {
