@@ -146,16 +146,40 @@ void drawRefreshIcon(int centerX, int centerY, bool active) {
   fillRotatedTriangle(centerX, centerY, phase, 9, 4, 9, 9, 4, 4, color);
 }
 
+void drawAppLogo(int x, int y) {
+  constexpr int kSize = 24;
+  canvas()->fillRoundRect(x, y, kSize, kSize, 6, kCard);
+  canvas()->drawRoundRect(x, y, kSize, kSize, 6, kLine);
+  const int trackX = x + 5;
+  const int trackWidth = 14;
+  const int rowHeight = 3;
+  const int rows[3] = {y + 5, y + 10, y + 15};
+  const int fills[3] = {10, 7, 12};
+  const uint16_t colors[3] = {
+      toneColor(UsageTone::Green),
+      toneColor(UsageTone::Amber),
+      toneColor(UsageTone::Red),
+  };
+  for (int i = 0; i < 3; ++i) {
+    canvas()->fillRoundRect(trackX, rows[i], trackWidth, rowHeight, 1, kTrack);
+    canvas()->fillRoundRect(trackX, rows[i], fills[i], rowHeight, 1, colors[i]);
+  }
+}
+
 void drawSettingsIcon(int centerX, int centerY, bool active) {
   const uint16_t color = active ? kAccent : kMuted;
-  canvas()->drawCircle(centerX, centerY, 7, color);
-  canvas()->fillCircle(centerX, centerY, 3, color);
-  for (int offset = -1; offset <= 1; offset += 2) {
-    canvas()->drawLine(centerX + offset * 5, centerY - 10, centerX + offset * 4, centerY - 7, color);
-    canvas()->drawLine(centerX + offset * 5, centerY + 10, centerX + offset * 4, centerY + 7, color);
-    canvas()->drawLine(centerX - 10, centerY + offset * 5, centerX - 7, centerY + offset * 4, color);
-    canvas()->drawLine(centerX + 10, centerY + offset * 5, centerX + 7, centerY + offset * 4, color);
-  }
+  // A solid toothed ring with an empty axle reads as a cog at 18 pixels. The
+  // previous thin radial lines and filled centre looked like a sun/theme icon.
+  canvas()->fillCircle(centerX, centerY, 7, color);
+  canvas()->fillRect(centerX - 2, centerY - 11, 4, 5, color);
+  canvas()->fillRect(centerX - 2, centerY + 6, 4, 5, color);
+  canvas()->fillRect(centerX - 11, centerY - 2, 5, 4, color);
+  canvas()->fillRect(centerX + 6, centerY - 2, 5, 4, color);
+  canvas()->fillRect(centerX - 8, centerY - 8, 4, 4, color);
+  canvas()->fillRect(centerX + 4, centerY - 8, 4, 4, color);
+  canvas()->fillRect(centerX - 8, centerY + 4, 4, 4, color);
+  canvas()->fillRect(centerX + 4, centerY + 4, 4, 4, color);
+  canvas()->fillCircle(centerX, centerY, 3, kBackground);
 }
 
 void drawClockIcon(int centerX, int centerY) {
@@ -192,6 +216,32 @@ const char* headerStateLabel(UiState state) {
   return "ERR";
 }
 
+const char* refreshOutcomeLabel(RefreshOutcome outcome) {
+  switch (outcome) {
+    case RefreshOutcome::Updated: return "OK";
+    case RefreshOutcome::Cooldown: return "WAIT";
+    case RefreshOutcome::Blocked: return "RATE";
+    case RefreshOutcome::Authentication: return "AUTH";
+    case RefreshOutcome::Busy: return "BUSY";
+    case RefreshOutcome::Failed: return "ERR";
+    case RefreshOutcome::None: break;
+  }
+  return "";
+}
+
+UsageTone refreshOutcomeTone(RefreshOutcome outcome) {
+  switch (outcome) {
+    case RefreshOutcome::Updated: return UsageTone::Green;
+    case RefreshOutcome::Cooldown:
+    case RefreshOutcome::Busy: return UsageTone::Amber;
+    case RefreshOutcome::Blocked:
+    case RefreshOutcome::Authentication:
+    case RefreshOutcome::Failed: return UsageTone::Red;
+    case RefreshOutcome::None: break;
+  }
+  return UsageTone::Green;
+}
+
 UsageTone stateTone(UiState state) {
   switch (state) {
     case UiState::Online:
@@ -206,18 +256,21 @@ UsageTone stateTone(UiState state) {
   return UsageTone::Red;
 }
 
-void drawHeaderDynamic(UiState state, bool refreshing, uint64_t dataAgeMs) {
+void drawHeaderDynamic(UiState state, bool refreshing, uint64_t dataAgeMs,
+                       RefreshOutcome refreshOutcome) {
   constexpr int kHeaderStatusMaxWidth = 24;
   char age[16] = {};
   formatAge(dataAgeMs, age, sizeof(age));
   drawFontRightText(341, 20, age, kSmoothFont11, kMuted, kBackground);
-  canvas()->fillCircle(354, 27, 4, toneColor(stateTone(state)));
-  const char* rawStatus = headerStateLabel(state);
+  const bool showRefreshOutcome = !refreshing && refreshOutcome != RefreshOutcome::None;
+  const UsageTone statusTone = showRefreshOutcome ? refreshOutcomeTone(refreshOutcome) : stateTone(state);
+  canvas()->fillCircle(354, 27, 4, toneColor(statusTone));
+  const char* rawStatus = showRefreshOutcome ? refreshOutcomeLabel(refreshOutcome) : headerStateLabel(state);
   const char* status = smoothTextWidth(kSmoothFont11, rawStatus) <= kHeaderStatusMaxWidth
       ? rawStatus
       : "ERR";
   drawFontRightText(393, 20, status,
-                    kSmoothFont11, toneColor(stateTone(state)), kBackground);
+                    kSmoothFont11, toneColor(statusTone), kBackground);
   drawRefreshIcon(kUiRefreshIconCenterX, 27, refreshing);
   drawSettingsIcon(kUiSettingsIconCenterX, 27, state == UiState::ConfigPortal);
 }
@@ -489,21 +542,23 @@ void drawSection(const UsageSection* source, const char* fallbackId, int y, int 
   }
 }
 
-void refreshHeaderRegion(UiState state, bool refreshing, uint64_t dataAgeMs) {
+void refreshHeaderRegion(UiState state, bool refreshing, uint64_t dataAgeMs,
+                         RefreshOutcome refreshOutcome) {
   constexpr int kHeaderDynamicLeft = 276;
   constexpr int kHeaderDynamicTop = 14;
   constexpr int kHeaderDynamicWidth = 190;
   constexpr int kHeaderDynamicHeight = 28;
   canvas()->fillRect(kHeaderDynamicLeft, kHeaderDynamicTop,
                      kHeaderDynamicWidth, kHeaderDynamicHeight, kBackground);
-  drawHeaderDynamic(state, refreshing, dataAgeMs);
+  drawHeaderDynamic(state, refreshing, dataAgeMs, refreshOutcome);
   displayFlushRect(kHeaderDynamicLeft, kHeaderDynamicTop,
                    kHeaderDynamicWidth, kHeaderDynamicHeight);
 }
 
 void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refreshing,
                       uint64_t nowEpochMs, uint64_t dataAgeMs, bool snapshotValuesChanged) {
-  refreshHeaderRegion(state, refreshing, dataAgeMs);
+  const RefreshOutcome refreshOutcome = snapshot ? snapshot->refreshOutcome : RefreshOutcome::None;
+  refreshHeaderRegion(state, refreshing, dataAgeMs, refreshOutcome);
 
   if (!snapshot || !snapshot->valid || state == UiState::Setup || state == UiState::ConfigPortal) return;
 
@@ -526,8 +581,10 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   Arduino_GFX* display = canvas();
   display->fillScreen(kBackground);
 
-  drawFontText(17, 16, "CC Meter", kSmoothFont18, kText, kBackground);
-  drawHeaderDynamic(state, refreshing, dataAgeMs);
+  drawAppLogo(17, 15);
+  drawFontText(49, 16, "CC Meter", kSmoothFont18, kText, kBackground);
+  drawHeaderDynamic(state, refreshing, dataAgeMs,
+                    snapshot ? snapshot->refreshOutcome : RefreshOutcome::None);
 
   if (state == UiState::Setup || state == UiState::ConfigPortal) {
     drawSetupBody(state, apSsid, apIp);
@@ -565,8 +622,9 @@ void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refres
   refreshUiRegions(snapshot, state, refreshing, nowEpochMs, dataAgeMs, true);
 }
 
-void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs) {
-  refreshHeaderRegion(state, refreshing, dataAgeMs);
+void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs,
+                     RefreshOutcome refreshOutcome) {
+  refreshHeaderRegion(state, refreshing, dataAgeMs, refreshOutcome);
 }
 
 }  // namespace ccmeter

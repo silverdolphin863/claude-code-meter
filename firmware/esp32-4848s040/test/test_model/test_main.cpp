@@ -45,7 +45,7 @@ void test_usage_payload_maps_optional_windows_and_sections() {
 }
 
 void test_serial_usage_envelope_maps_the_same_panel_payload() {
-  const char payload[] = R"json({"type":"usage","data":{"server_time_ms":1786104000000,"generated_at":"2026-08-07T12:00:00Z","sections":[{"id":"codex","name":"Codex","limits":[{"label":"Weekly","percent":31,"resets_at":"2026-08-14T12:00:00Z","reset_label":"14.08 14:00","window_hours":168}]}]}})json";
+  const char payload[] = R"json({"type":"usage","data":{"server_time_ms":1786104000000,"generated_at":"2026-08-07T12:00:00Z","manual_refresh":{"status":"cooldown","retry_at":1786104060000},"sections":[{"id":"codex","name":"Codex","limits":[{"label":"Weekly","percent":31,"resets_at":"2026-08-14T12:00:00Z","reset_label":"14.08 14:00","window_hours":168}]}]}})json";
   UsageSnapshot snapshot;
   char error[64] = {};
   TEST_ASSERT_TRUE(parseUsageEnvelope(payload, strlen(payload), snapshot, error, sizeof(error)));
@@ -57,6 +57,9 @@ void test_serial_usage_envelope_maps_the_same_panel_payload() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 168.0f, snapshot.sections[0].limits[0].windowHours);
   TEST_ASSERT_EQUAL_STRING("14.08 14:00", snapshot.sections[0].limits[0].resetLabel);
   TEST_ASSERT_EQUAL_UINT64(1786104000000ULL, snapshot.generatedAtEpochMs);
+  TEST_ASSERT_EQUAL(static_cast<int>(RefreshOutcome::Cooldown), static_cast<int>(snapshot.refreshOutcome));
+  TEST_ASSERT_TRUE(snapshot.hasRefreshRetry);
+  TEST_ASSERT_EQUAL_UINT64(1786104060000ULL, snapshot.refreshRetryEpochMs);
 }
 
 void test_serial_usage_envelope_rejects_non_usage_messages() {
@@ -68,7 +71,7 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.0.8\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.0.9\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
 }

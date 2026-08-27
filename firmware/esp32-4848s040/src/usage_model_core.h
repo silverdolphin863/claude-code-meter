@@ -37,13 +37,26 @@ struct UsageSection {
   bool hasError;
 };
 
+enum class RefreshOutcome : uint8_t {
+  None,
+  Updated,
+  Cooldown,
+  Blocked,
+  Authentication,
+  Busy,
+  Failed,
+};
+
 struct UsageSnapshot {
   UsageSection sections[kMaxSections];
   uint8_t sectionCount;
   uint32_t serverStaleMs;
   uint64_t generatedAtEpochMs;
+  uint64_t refreshRetryEpochMs;
+  RefreshOutcome refreshOutcome;
   bool valid;
   bool hasGeneratedAt;
+  bool hasRefreshRetry;
 };
 
 enum class UsageTone : uint8_t {

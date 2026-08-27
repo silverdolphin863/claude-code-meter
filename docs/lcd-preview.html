@@ -57,8 +57,21 @@
       padding: 0 17px;
     }
 
-    h1 {
+    .brand {
+      min-width: 0;
       flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .app-logo {
+      width: 24px;
+      height: 24px;
+      flex: none;
+    }
+
+    h1 {
       margin: 0;
       font-size: 18px;
       line-height: 1;
@@ -357,7 +370,18 @@
 <body>
   <section class="lcd" aria-label="Proposed 480 by 480 CC Meter LCD interface">
     <header>
-      <h1>CC Meter</h1>
+      <span class="brand">
+        <svg class="app-logo" viewBox="0 0 24 24" aria-label="CC Meter logo">
+          <rect x=".5" y=".5" width="23" height="23" rx="6" fill="#1e1c27" stroke="#2f2c3b"></rect>
+          <rect x="5" y="5" width="14" height="3" rx="1.5" fill="#262332"></rect>
+          <rect x="5" y="5" width="10" height="3" rx="1.5" fill="#39d98a"></rect>
+          <rect x="5" y="10.5" width="14" height="3" rx="1.5" fill="#262332"></rect>
+          <rect x="5" y="10.5" width="7" height="3" rx="1.5" fill="#ffca3b"></rect>
+          <rect x="5" y="16" width="14" height="3" rx="1.5" fill="#262332"></rect>
+          <rect x="5" y="16" width="12" height="3" rx="1.5" fill="#ff5b5b"></rect>
+        </svg>
+        <h1>CC Meter</h1>
+      </span>
       <span class="connection" data-tone="ok">
         <span class="freshness">2m</span>
         <span class="status-dot" aria-hidden="true"></span>
@@ -373,8 +397,8 @@
       </span>
       <span class="header-icon" aria-label="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4A2 2 0 0 0 4 9.9l.2.1a2 2 0 0 1 1 1.7v.6a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.6a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z"></path>
           <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5 7 7M17 17l1.5 1.5M18.5 5.5 17 7M7 17l-1.5 1.5"></path>
         </svg>
       </span>
     </header>
@@ -483,12 +507,22 @@
 
     settings.addEventListener('click', () => applyState(state === 'config' ? 'usb' : 'config'));
     let refreshTimer;
+    let refreshResultTimer;
     refresh.addEventListener('click', () => {
       clearTimeout(refreshTimer);
+      clearTimeout(refreshResultTimer);
       refresh.classList.remove('refreshing');
       void refresh.offsetWidth;
       refresh.classList.add('refreshing');
-      refreshTimer = setTimeout(() => refresh.classList.remove('refreshing'), 5000);
+      refreshTimer = setTimeout(() => {
+        refresh.classList.remove('refreshing');
+        if (state !== 'usb') return;
+        freshness.textContent = '<1m';
+        transport.textContent = 'OK';
+        connection.dataset.tone = 'ok';
+        connection.setAttribute('aria-label', 'Refreshed successfully');
+        refreshResultTimer = setTimeout(() => applyState(state), 3000);
+      }, 1400);
     });
     applyState(state);
   </script>

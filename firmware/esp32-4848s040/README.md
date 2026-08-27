@@ -84,7 +84,7 @@ Serial runs at 115200 baud over the CH340 UART0 connection. Native USB CDC is di
 After boot, the firmware emits this compact hello line:
 
 ```json
-{"type":"hello","firmware":"1.0.8","model":"ESP32-4848S040"}
+{"type":"hello","firmware":"1.0.9","model":"ESP32-4848S040"}
 ```
 
 The host sends one panel payload per line by wrapping the normal schema-1 object in a usage envelope. The `data` object is the same object accepted by the Wi-Fi endpoint:

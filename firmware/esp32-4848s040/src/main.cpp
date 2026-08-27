@@ -221,6 +221,10 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
   UsageSnapshot nextSnapshot = incomingSnapshot;
   const UiState previousUiState = currentUiState();
   const bool completedSerialRefresh = fromSerial && serialRefreshPending;
+  const bool refreshOutcomeChanged = !hasSnapshot ||
+      usageSnapshot.refreshOutcome != nextSnapshot.refreshOutcome ||
+      usageSnapshot.hasRefreshRetry != nextSnapshot.hasRefreshRetry ||
+      usageSnapshot.refreshRetryEpochMs != nextSnapshot.refreshRetryEpochMs;
   const bool visibleDataChanged = !hasSnapshot || !snapshotVisuallyEqual(usageSnapshot, nextSnapshot);
   const bool layoutChanged = !hasSnapshot || !snapshotLayoutEqual(usageSnapshot, nextSnapshot);
   const uint64_t receivedSystemTime = systemEpochMs();
@@ -255,7 +259,7 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
   }
   if (layoutChanged || currentUiState() != previousUiState) requestFullRender();
   else if (visibleDataChanged) requestSnapshotRender();
-  else if (completedSerialRefresh) requestDynamicRender();
+  else if (completedSerialRefresh || refreshOutcomeChanged) requestDynamicRender();
 }
 
 void performPoll(bool manual) {
@@ -451,7 +455,8 @@ void serviceSerialRefreshTimeout() {
 
 void serviceRefreshAnimation() {
   if (!refreshing || fullRenderPending || !due(nextRefreshAnimationAt, millis())) return;
-  uiRefreshHeader(currentUiState(), true, dataAgeMs());
+  uiRefreshHeader(currentUiState(), true, dataAgeMs(),
+                  hasSnapshot ? usageSnapshot.refreshOutcome : RefreshOutcome::None);
   nextRefreshAnimationAt = millis() + kUiRefreshAnimationFrameMs;
 }
 

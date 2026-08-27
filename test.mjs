@@ -141,6 +141,10 @@ assert.match(serverSource, /source: 'pending'/,
   'a cold Codex cache must report no windows rather than log-derived ones the plan may not have');
 assert.doesNotMatch(serverSource, /payload\(manual, true\)/,
   'the panel must not block on a cold Codex query: it delayed the first panel update by 23 seconds');
+assert.match(serverSource, /Promise\.all\(\[\s*refreshClaudeUsage\(true\),\s*codexSection\(true\),/,
+  'a manual refresh must update Claude and Codex in parallel so the LCD does not time out');
+assert.match(serverSource, /manual_refresh: manualRefresh/,
+  'a manual refresh response must explain whether it updated or was safely refused');
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');
@@ -157,7 +161,7 @@ assert.doesNotMatch(firmwareMainSource, /if \(configPortal\.active\(\)\) configP
   'routine USB payloads must not close setup and partially paint meter rows over it');
 assert.match(firmwareMainSource, /serialRefreshPending = true;[\s\S]*refreshDynamicNow\(\)/,
   'a serial refresh tap must display immediate feedback while waiting for the host');
-assert.match(firmwareMainSource, /else if \(completedSerialRefresh\) requestDynamicRender\(\);/,
+assert.match(firmwareMainSource, /else if \(completedSerialRefresh \|\| refreshOutcomeChanged\) requestDynamicRender\(\);/,
   'refresh feedback must clear even when the returned percentages are unchanged');
 assert.match(firmwareMainSource, /serviceSerialRefreshTimeout\(\);/,
   'refresh feedback must clear if the host never answers');
@@ -175,10 +179,16 @@ assert.ok(touchBottom >= 60 && touchLeft <= 370,
   'the physical refresh target must be substantially larger than its visible glyph');
 assert.match(firmwareUiSource, /drawRefreshIcon\(kUiRefreshIconCenterX/,
   'refresh rendering must use the shared touch-aligned icon position');
+assert.match(firmwareUiSource, /drawAppLogo\(17, 15\);[\s\S]*drawFontText\(49, 16, "CC Meter"/,
+  'the LCD header must show the app logo before the padded CC Meter title');
 assert.match(firmwareUiSource, /millis\(\) \/ kUiRefreshAnimationFrameMs[\s\S]*phaseDegrees[\s\S]*fillArc\([^;]+phaseDegrees[\s\S]*fillRotatedTriangle/,
   'the active LCD refresh arrows must rotate as one glyph');
 assert.doesNotMatch(firmwareUiSource, /kOrbit[XY]|fillCircle\(centerX \+ kOrbit/,
   'the active LCD refresh icon must not use a separate orbiting dot');
+assert.match(firmwareUiSource, /void drawSettingsIcon[\s\S]*fillCircle\(centerX, centerY, 3, kBackground\);/,
+  'the settings control must use a hollow-centred cog rather than a sun-like dot');
+assert.match(firmwareUiSource, /case RefreshOutcome::Updated: return "OK";[\s\S]*case RefreshOutcome::Cooldown: return "WAIT";[\s\S]*case RefreshOutcome::Blocked: return "RATE";/,
+  'the LCD must show a compact truthful result after every refresh tap');
 assert.match(firmwareUiHeaderSource, /kUiRefreshAnimationFrameMs = 100;/,
   'the LCD refresh animation must use the preview-matched frame interval');
 assert.match(firmwareMainSource, /nextRefreshAnimationAt = millis\(\) \+ kUiRefreshAnimationFrameMs;[\s\S]*serviceRefreshAnimation\(\);/,
@@ -421,7 +431,9 @@ try {
   assert.equal(liveCodex.limits[0].resets_at, new Date(liveCodexReset * 1000).toISOString());
   const manual = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
   assert.equal(manual.status, 200);
-  const expired = (await manual.json()).sections.find((section) => section.id === 'claude');
+  const manualPayload = await manual.json();
+  const expired = manualPayload.sections.find((section) => section.id === 'claude');
+  assert.equal(manualPayload.manual_refresh.status, 'auth');
   assert.equal(expired.limits[0].percent, 12);
   assert.equal(expired.auth_required, true);
   assert.equal(mockRequests, 1);
@@ -467,11 +479,16 @@ try {
   const changedAt = new Date(Date.now() + 3000);
   await fs.utimes(credentials, changedAt, changedAt);
   const recoveredResponse = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
-  const recovered = (await recoveredResponse.json()).sections.find((section) => section.id === 'claude');
+  const recoveredPayload = await recoveredResponse.json();
+  const recovered = recoveredPayload.sections.find((section) => section.id === 'claude');
   assert.equal(recovered.auth_required, false);
   assert.equal(recovered.limits[0].percent, 34);
+  assert.equal(recoveredPayload.manual_refresh.status, 'updated');
   assert.equal(mockRequests, 3);
-  await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
+  const cooldownResponse = await fetch(`http://127.0.0.1:${port}/usage.json?refresh=1`);
+  const cooldownPayload = await cooldownResponse.json();
+  assert.equal(cooldownPayload.manual_refresh.status, 'cooldown');
+  assert.ok(cooldownPayload.manual_refresh.retry_at > Date.now());
   assert.equal(mockRequests, 3, 'successful manual refreshes must keep the click cooldown');
 
   // Asking the OS, like the other three ports: the old port + 2000 guess

@@ -38,6 +38,7 @@ void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refresh
                       uint64_t nowEpochMs, uint64_t dataAgeMs);
 void uiRefreshSnapshot(const UsageSnapshot* snapshot, UiState state, bool refreshing,
                        uint64_t nowEpochMs, uint64_t dataAgeMs);
-void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs);
+void uiRefreshHeader(UiState state, bool refreshing, uint64_t dataAgeMs,
+                     RefreshOutcome refreshOutcome);
 
 }  // namespace ccmeter

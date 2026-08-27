@@ -299,7 +299,7 @@ function clearRefreshFailure() {
 }
 
 async function refreshClaudeUsage(force = false) {
-  if (refreshing) return;
+  if (refreshing) return 'busy';
   if (authRequired) {
     const credentialsChanged = credentialsMtime() > blockedCredentialsMtimeMs;
     const cacheChanged = hasNewReadableCache();
@@ -311,37 +311,38 @@ async function refreshClaudeUsage(force = false) {
     // So re-probe on a slow timer as a floor. NOT `>=` on the mtime: when the
     // file is unchanged the two are equal, so that would retry every poll.
     const overdue = Date.now() - authBlockedAt >= AUTH_RECHECK_MS;
-    if (!credentialsChanged && !cacheChanged && !overdue) return;
+    if (!credentialsChanged && !cacheChanged && !overdue) return 'auth';
     clearRefreshFailure();
     lastRefreshAttemptAt = 0;
   }
-  if (Date.now() < nextAllowedAt) return;
-  if (force && Date.now() - lastRefreshAttemptAt < MANUAL_REFRESH_COOLDOWN_MS) return;
+  if (Date.now() < nextAllowedAt) return 'blocked';
+  if (force && Date.now() - lastRefreshAttemptAt < MANUAL_REFRESH_COOLDOWN_MS) return 'cooldown';
 
   let age = Infinity;
   try { age = Date.now() - fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { /* no cache yet */ }
   const minAge = cacheHasExpiredWindow() ? EXPIRED_WINDOW_REFRESH_MS : REFRESH_TTL_MS;
-  if (!force && age < minAge) return;
+  if (!force && age < minAge) return 'cached';
   lastRefreshAttemptAt = Date.now();
 
   let token;
   try {
     token = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth?.accessToken;
-  } catch { markAuthRequired(); return; }
-  if (!token) { markAuthRequired(); return; }
+  } catch { markAuthRequired(); return 'auth'; }
+  if (!token) { markAuthRequired(); return 'auth'; }
 
   // Exclusive create, with stale-lock recovery for interrupted refreshes.
   try {
     fs.writeFileSync(CLAUDE_LOCK, String(Date.now()), { flag: 'wx' });
   } catch {
     try {
-      if (Date.now() - fs.statSync(CLAUDE_LOCK).mtimeMs < 30_000) return; // someone else is fetching
+      if (Date.now() - fs.statSync(CLAUDE_LOCK).mtimeMs < 30_000) return 'busy'; // someone else is fetching
       fs.unlinkSync(CLAUDE_LOCK);
       fs.writeFileSync(CLAUDE_LOCK, String(Date.now()), { flag: 'wx' });
-    } catch { return; }
+    } catch { return 'busy'; }
   }
 
   refreshing = true;
+  let outcome = 'failed';
   try {
     const res = await fetch(USAGE_API, {
       headers: { Authorization: 'Bearer ' + token, 'anthropic-beta': 'oauth-2025-04-20' },
@@ -352,9 +353,8 @@ async function refreshClaudeUsage(force = false) {
     try { parsed = JSON.parse(text); } catch { /* handled below */ }
     if (res.status === 401 || res.status === 403) {
       markAuthRequired();
-      return;
-    }
-    if (!res.ok || parsed?.error) {
+      outcome = 'auth';
+    } else if (!res.ok || parsed?.error) {
       lastRefreshError = 'api ' + res.status;
       // Obey Retry-After when the server states one, else back off
       // exponentially from 5 minutes up to an hour.
@@ -366,9 +366,11 @@ async function refreshClaudeUsage(force = false) {
       nextAllowedAt = Date.now() + backoff;
       lastRefreshError += ' (retrying in ' + Math.round(backoff / 60_000) + 'm)';
       saveBackoff();
+      outcome = 'blocked';
     } else if (parsed) {
       fs.writeFileSync(CLAUDE_CACHE, text);
       clearRefreshFailure();
+      outcome = 'updated';
     } else {
       throw new Error('invalid usage response');
     }
@@ -377,10 +379,12 @@ async function refreshClaudeUsage(force = false) {
     failures += 1;
     nextAllowedAt = Date.now() + Math.min(60 * 60_000, 60_000 * 2 ** (failures - 1));
     saveBackoff();
+    outcome = 'failed';
   } finally {
     refreshing = false;
     try { fs.unlinkSync(CLAUDE_LOCK); } catch { /* already gone */ }
   }
+  return outcome;
 }
 
 function claudeSection() {
@@ -732,6 +736,25 @@ async function payload(forceCodex = false) {
   };
 }
 
+async function refreshedPayload() {
+  // Claude and Codex are independent sources. Waiting for them in sequence can
+  // take almost the LCD's full 20-second animation timeout, after which a valid
+  // answer looks like no answer. Run both refreshes together and tell the panel
+  // whether Claude was updated or deliberately refused for safety.
+  const [status, codex] = await Promise.all([
+    refreshClaudeUsage(true),
+    codexSection(true),
+  ]);
+  const manualRefresh = { status: status || 'failed' };
+  if (status === 'cooldown') manualRefresh.retry_at = lastRefreshAttemptAt + MANUAL_REFRESH_COOLDOWN_MS;
+  else if (status === 'blocked' && nextAllowedAt > Date.now()) manualRefresh.retry_at = nextAllowedAt;
+  return {
+    generated_at: new Date().toISOString(),
+    manual_refresh: manualRefresh,
+    sections: [claudeSection(), codex],
+  };
+}
+
 function safeTokenEqual(expected, supplied) {
   if (!expected || !supplied) return false;
   const expectedBytes = Buffer.from(expected);
@@ -783,9 +806,9 @@ function panelPayload(data) {
 }
 
 async function getPanelUsage(manual = false) {
-  if (manual) await refreshClaudeUsage(true);
-  else refreshClaudeUsage();
-  return panelPayload(await payload(manual));
+  if (manual) return panelPayload(await refreshedPayload());
+  refreshClaudeUsage();
+  return panelPayload(await payload(false));
 }
 
 async function handlePanelRequest(req, res) {
@@ -908,12 +931,16 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/usage.json') {
     const manual = new URL(req.url, 'http://127.0.0.1').searchParams.get('refresh') === '1';
-    if (manual) await refreshClaudeUsage(true);
-    // Normal polls answer from the cache immediately. A manual refresh waits
-    // for the one allowed API attempt, so the button reflects its result.
-    else refreshClaudeUsage();
     let body;
-    try { body = JSON.stringify(await payload(manual)); }
+    try {
+      if (manual) body = JSON.stringify(await refreshedPayload());
+      else {
+        // Normal polls answer from the cache immediately. A manual refresh waits
+        // for the one allowed API attempt, so the button reflects its result.
+        refreshClaudeUsage();
+        body = JSON.stringify(await payload(false));
+      }
+    }
     catch (e) { res.writeHead(500); return res.end(String(e)); }
     const headers = {
       'Content-Type': 'application/json',

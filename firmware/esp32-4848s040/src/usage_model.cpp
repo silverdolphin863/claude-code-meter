@@ -90,6 +90,18 @@ bool readTimestamp(JsonVariantConst value, uint64_t& epochMs) {
   return true;
 }
 
+RefreshOutcome readRefreshOutcome(JsonVariantConst value) {
+  const char* text = value.as<const char*>();
+  if (!text) return RefreshOutcome::None;
+  if (equalsIgnoreCase(text, "updated")) return RefreshOutcome::Updated;
+  if (equalsIgnoreCase(text, "cooldown")) return RefreshOutcome::Cooldown;
+  if (equalsIgnoreCase(text, "blocked")) return RefreshOutcome::Blocked;
+  if (equalsIgnoreCase(text, "auth")) return RefreshOutcome::Authentication;
+  if (equalsIgnoreCase(text, "busy")) return RefreshOutcome::Busy;
+  if (equalsIgnoreCase(text, "failed")) return RefreshOutcome::Failed;
+  return RefreshOutcome::None;
+}
+
 float inferredWindowHours(const char* label) {
   if (containsIgnoreCase(label, "5-hour") || containsIgnoreCase(label, "5h")) return 5.0f;
   if (containsIgnoreCase(label, "weekly") || containsIgnoreCase(label, "7-day") || containsIgnoreCase(label, "7d")) {
@@ -157,6 +169,16 @@ bool parseUsageObject(JsonObjectConst root, UsageSnapshot& snapshot, char* error
       readTimestamp(root["generated_at"], generatedAt)) {
     snapshot.generatedAtEpochMs = generatedAt;
     snapshot.hasGeneratedAt = true;
+  }
+
+  const JsonObjectConst manualRefresh = root["manual_refresh"].as<JsonObjectConst>();
+  if (!manualRefresh.isNull()) {
+    snapshot.refreshOutcome = readRefreshOutcome(manualRefresh["status"]);
+    uint64_t retryAt = 0;
+    if (readTimestamp(manualRefresh["retry_at"], retryAt)) {
+      snapshot.refreshRetryEpochMs = retryAt;
+      snapshot.hasRefreshRetry = true;
+    }
   }
 
   const JsonArrayConst sections = root["sections"].as<JsonArrayConst>();
