@@ -123,9 +123,10 @@ Codex authentication token.
 **Claude**: reads the standard Claude Code OAuth token from
 `~/.claude/.credentials.json` and calls
 `https://api.anthropic.com/api/oauth/usage` directly when the local cache is
-older than ten minutes. It writes the response to
-`~/.claude/usage-cache.json` and honours the cache lock. No status-line script
-is required.
+older than fifteen minutes. It writes the response to
+`~/.claude/usage-cache.json` and honours the cache lock. CC Meter should be the
+only automatic caller; status-line scripts should read this shared cache rather
+than query the undocumented endpoint themselves.
 
 **Codex**: launches the local Codex app-server and calls
 `account/rateLimits/read`, cached for five minutes. This returns the current
@@ -143,10 +144,12 @@ network path is isolated in `refreshClaudeUsage()` in `server.mjs`. Codex
 authentication and account requests remain inside the installed Codex CLI.
 
 The usage endpoint is undocumented and rate-limited (observed: HTTP 429 with a
-~57 minute `Retry-After`). CC Meter refreshes at most once every 10 minutes,
-honours `Retry-After` exactly, backs off exponentially on failure, and persists
-that backoff across restarts so relaunching cannot hammer a locked-out endpoint.
-Being undocumented, the endpoint may change or stop working without notice.
+~57 minute `Retry-After`). CC Meter refreshes automatically at most once every
+15 minutes, suppresses repeated manual taps for five minutes, honours
+`Retry-After` exactly, and shares its persisted backoff through
+`~/.claude/.usage-api-backoff.json`. Relaunching cannot hammer a locked-out
+endpoint. Being undocumented, the endpoint may change or stop working without
+notice.
 
 ## Local HTTP server
 

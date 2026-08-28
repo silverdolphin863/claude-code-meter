@@ -125,13 +125,22 @@ assert.equal(
 );
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
 // A window whose reset time has passed is dropped rather than shown with the
-// previous window's percentage. On the plain 10 minute cadence that left the
-// gauge missing for most of that window, which reads as "no data" on both the
-// widget and the hardware panel. A visibly reset window must shorten the wait.
+// previous window's percentage. It must not trigger the former two-minute
+// retry loop while waiting for Anthropic to publish the replacement window.
 assert.match(serverSource, /cacheHasExpiredWindow\(\) \? EXPIRED_WINDOW_REFRESH_MS : REFRESH_TTL_MS/,
-  'a reset window must refresh sooner than the normal cadence');
-assert.match(serverSource, /EXPIRED_WINDOW_REFRESH_MS = 120_000/,
-  'the shortened refresh must keep a floor so clock skew cannot cause a poll loop');
+  'an expired window must still pass through the provider cadence gate');
+assert.match(serverSource, /EXPIRED_WINDOW_REFRESH_MS = REFRESH_TTL_MS/,
+  'an expired window must not shorten the 15-minute provider cadence');
+assert.match(serverSource, /REFRESH_TTL_MS = 900_000/,
+  'automatic Claude usage requests must be limited to one every 15 minutes');
+assert.match(serverSource, /MANUAL_REFRESH_COOLDOWN_MS = 300_000/,
+  'repeated manual refresh taps must keep a five-minute safety cooldown');
+assert.match(serverSource, /BACKOFF_FILE = path\.join\(HOME, '\.claude', '\.usage-api-backoff\.json'\)/,
+  'CC Meter must use the shared Claude usage provider backoff');
+assert.match(serverSource, /LEGACY_BACKOFF_FILE = path\.join\(HOME, '\.claude', '\.ccmeter-refresh\.json'\)/,
+  'existing CC Meter lockouts must be migrated during the host update');
+assert.match(serverSource, /lastAttemptAt: lastRefreshAttemptAt/,
+  'the manual cooldown must survive an app restart');
 // The session-log fallback is derived from older Codex formats and can describe
 // windows the current plan no longer has: a Pro account reports a single weekly
 // window, while old logs still carry a 5-hour one. The widget re-polls every ten
@@ -344,6 +353,73 @@ const mockUsageApi = http.createServer((_req, res) => {
   }));
 });
 await new Promise((resolve) => mockUsageApi.listen(mockPort, '127.0.0.1', resolve));
+
+// An update from host 1.1.7 must not forget a provider lockout that is still
+// stored under the old CC Meter-only filename. Import it into the shared state
+// before any request can reach Anthropic.
+{
+  const migrationRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccmeter-backoff-migration-'));
+  const migrationClaude = path.join(migrationRoot, '.claude');
+  await fs.mkdir(migrationClaude, { recursive: true });
+  await fs.writeFile(path.join(migrationClaude, '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'migration-test-token' },
+  }));
+  await fs.writeFile(path.join(migrationClaude, 'usage-cache.json'), JSON.stringify({ limits: [] }));
+  const legacyRetryAt = Date.now() + 60_000;
+  await fs.writeFile(path.join(migrationClaude, '.ccmeter-refresh.json'), JSON.stringify({
+    nextAllowedAt: legacyRetryAt,
+    failures: 1,
+    error: 'api 429 (retrying in 1m)',
+  }));
+  const migrationPort = await freePort();
+  const migrationChild = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: migrationRoot,
+      CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
+      CCMETER_CODEX_LIVE: '0',
+      PORT: String(migrationPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let migrationOutput = '';
+  migrationChild.stdout.on('data', (chunk) => { migrationOutput += chunk; });
+  migrationChild.stderr.on('data', (chunk) => { migrationOutput += chunk; });
+  try {
+    let migrationResponse;
+    const migrationDeadline = Date.now() + 5000;
+    while (!migrationResponse && Date.now() < migrationDeadline) {
+      try {
+        migrationResponse = await fetch(`http://127.0.0.1:${migrationPort}/usage.json?refresh=1`);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    assert(migrationResponse, `migration server did not start: ${migrationOutput}`);
+    const migrationPayload = await migrationResponse.json();
+    assert.equal(migrationPayload.manual_refresh.status, 'blocked');
+    assert.equal(migrationPayload.manual_refresh.retry_at, legacyRetryAt);
+    assert.equal(mockRequests, 0, 'a migrated provider lockout must prevent an external request');
+    const sharedState = JSON.parse(await fs.readFile(
+      path.join(migrationClaude, '.usage-api-backoff.json'), 'utf8'));
+    assert.equal(sharedState.nextAllowedAt, legacyRetryAt,
+      'the legacy release time must be copied to the shared backoff file');
+  } finally {
+    if (migrationChild.exitCode === null) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1000);
+        migrationChild.once('close', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        migrationChild.kill();
+      });
+    }
+    await fs.rm(migrationRoot, { recursive: true, force: true });
+  }
+}
+
 const child = spawn(process.execPath, ['server.mjs'], {
   cwd: new URL('.', import.meta.url),
   env: {

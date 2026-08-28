@@ -547,7 +547,7 @@ function render() {
   if (mode === 'compact') renderCompact(); else renderFull();
 
   // Freshness must describe the DATA, not my polling. Claude Code rewrites
-  // usage-cache.json only when it refreshes, so a green dot over a 10 minute
+  // usage-cache.json only when it refreshes, so a green dot over a 15 minute
   // old file would be a lie. Report the worst source age, plus fetch age.
   const fetchAge = Math.round((Date.now() - lastOk) / 1000);
   let dataAge = fetchAge;
@@ -556,7 +556,7 @@ function render() {
       dataAge = Math.max(dataAge, Math.round(s.stale_ms / 1000) + fetchAge);
     }
   }
-  // Thresholds track the 10 minute refresh TTL: under 15m is normal by design.
+  // Thresholds track the 15 minute refresh TTL: under 15m is normal by design.
   const cls = 'dot' + (dataAge > 2700 ? ' dead' : dataAge > 900 ? ' stale' : '');
   document.getElementById('dot').className = cls;
   document.getElementById('dot2').className = cls;

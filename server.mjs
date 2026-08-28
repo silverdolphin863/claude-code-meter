@@ -19,14 +19,17 @@ const CLAUDE_CREDS = path.join(HOME, '.claude', '.credentials.json');
 const USAGE_API = process.env.CCMETER_USAGE_API || 'https://api.anthropic.com/api/oauth/usage';
 // The usage endpoint's limit is UNDOCUMENTED. The only measurement we have is a
 // 429 carrying Retry-After 3433s, i.e. an hourly bucket, ceiling unknown. 90s
-// here meant ~960 calls/day and locked the account out for 18 hours. 10 minutes
-// is 6 calls/hour, far below any plausible ceiling, and costs nothing: these
-// windows are 5 hours and 7 days long.
-const REFRESH_TTL_MS = 600_000;
-const MANUAL_REFRESH_COOLDOWN_MS = 60_000;
+// here meant ~960 calls/day and locked the account out for 18 hours. Keep one
+// automatic owner at four calls/hour and suppress repeated manual taps: these
+// windows are 5 hours and 7 days long, so tighter polling adds little value.
+const REFRESH_TTL_MS = 900_000;
+const MANUAL_REFRESH_COOLDOWN_MS = 300_000;
 // Backoff state outlives the process on purpose: restarting the widget while
-// locked out must not hand it a fresh licence to hammer the endpoint.
-const BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
+// locked out must not hand it a fresh licence to hammer the endpoint. Use the
+// shared filename understood by the Claude status line instead of maintaining
+// two independent provider lockouts.
+const BACKOFF_FILE = path.join(HOME, '.claude', '.usage-api-backoff.json');
+const LEGACY_BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
 const CODEX_SESSIONS = path.join(HOME, '.codex', 'sessions');
 const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(APP_ROOT, 'public');
@@ -212,13 +215,10 @@ function cacheMtime() {
   try { return fs.statSync(CLAUDE_CACHE).mtimeMs; } catch { return 0; }
 }
 
-// A window whose reset time has passed carries a percentage from the window
-// before it, so it gets dropped rather than shown as if it were current. That
-// leaves a hole in the display until the next refresh, and on the normal 10
-// minute cadence the gauge can be missing for most of that. Treat a visibly
-// reset window as a reason to refresh sooner, with a floor so a server clock
-// skew cannot turn this into a poll loop.
-const EXPIRED_WINDOW_REFRESH_MS = 120_000;
+// A reset window is hidden until Anthropic publishes its replacement. Do not
+// shorten the provider cadence while waiting: the former two-minute retry path
+// could make 30 requests/hour and was itself capable of triggering HTTP 429.
+const EXPIRED_WINDOW_REFRESH_MS = REFRESH_TTL_MS;
 
 function cacheHasExpiredWindow() {
   try {
@@ -239,10 +239,20 @@ function hasNewReadableCache() {
   } catch { return false; }
 }
 
+const backoffSource = !fs.existsSync(BACKOFF_FILE) && fs.existsSync(LEGACY_BACKOFF_FILE)
+  ? LEGACY_BACKOFF_FILE
+  : BACKOFF_FILE;
 try {
-  const saved = JSON.parse(fs.readFileSync(BACKOFF_FILE, 'utf8'));
+  const saved = JSON.parse(fs.readFileSync(backoffSource, 'utf8'));
   const savedError = String(saved.error || '');
-  const backoffMtimeMs = fs.statSync(BACKOFF_FILE).mtimeMs;
+  const backoffMtimeMs = fs.statSync(backoffSource).mtimeMs;
+  lastRefreshAttemptAt = Number(saved.lastAttemptAt) || 0;
+  // Host 1.1.7 and earlier used a private CC Meter backoff file. Copy it to the
+  // shared location once so an in-flight provider lockout survives the update
+  // and every local usage reader can honor the same release time.
+  if (backoffSource === LEGACY_BACKOFF_FILE) {
+    try { fs.writeFileSync(BACKOFF_FILE, JSON.stringify(saved)); } catch { /* best effort */ }
+  }
   // Migrate the old behavior that treated 401 like a transient outage. Auth
   // failures wait for credentials to change instead of sleeping for an hour.
   if (saved.authRequired || savedError === 'auth_required' || savedError.includes('api 401')) {
@@ -271,7 +281,7 @@ function saveBackoff() {
     fs.writeFileSync(BACKOFF_FILE, JSON.stringify({
       nextAllowedAt, failures, error: lastRefreshError,
       authRequired, credentialsMtimeMs: blockedCredentialsMtimeMs,
-      cacheMtimeMs: blockedCacheMtimeMs,
+      cacheMtimeMs: blockedCacheMtimeMs, lastAttemptAt: lastRefreshAttemptAt,
     }));
   } catch { /* best effort */ }
 }
