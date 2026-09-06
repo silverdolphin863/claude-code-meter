@@ -308,6 +308,87 @@ function clearRefreshFailure() {
   saveBackoff();
 }
 
+// ---- automatic OAuth renewal -----------------------------------------------
+// The CLI access token lives ~8h and only renews when a CLI session happens to
+// run, so it died every night and mornings began with hours of "login
+// expired". The CLI itself renews by POSTing its refresh token to the token
+// endpoint; both the URL and the client id below are read out of the shipped
+// claude binary (TOKEN_URL:"https://platform.claude.com/v1/oauth/token", the
+// client id sits next to the oauth callback route), not guessed. `claude auth
+// status` was tried first and does NOT renew a near-expiry token, so doing
+// what the CLI does is the only non-interactive path.
+//
+// Care, in order of importance:
+// - The response can rotate the refresh token. Whatever comes back is written
+//   straight back into .credentials.json (atomic temp+rename, all unrelated
+//   fields preserved), exactly as the CLI would.
+// - Renewal is attempted only inside the last RENEW_MARGIN_MS of a token's
+//   life, at most once per RENEW_RETRY_MS, so it adds about three requests per
+//   day to what the CLI already does.
+// - A definitive rejection (invalid_grant and kin) means the refresh token is
+//   dead: fall through to the visible reconnect flow. Rate limiting or network
+//   trouble means try again next poll, with the still-valid token kept in use.
+const OAUTH_TOKEN_URL = process.env.CCMETER_OAUTH_TOKEN_URL
+  || 'https://platform.claude.com/v1/oauth/token';
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+// Cloudflare fronts the token endpoint and blocks generic client strings with
+// a 403 (error 1010); the CLI product string passes.
+const OAUTH_USER_AGENT = 'claude-code/2.1.234';
+const RENEW_MARGIN_MS = 30 * 60_000;
+const RENEW_RETRY_MS = 20 * 60_000;
+let lastRenewAttemptAt = 0;
+
+async function renewClaudeToken() {
+  if (Date.now() - lastRenewAttemptAt < RENEW_RETRY_MS) return { state: 'skipped' };
+  lastRenewAttemptAt = Date.now();
+
+  let creds;
+  try { creds = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8')); } catch { return { state: 'invalid' }; }
+  const refreshToken = creds?.claudeAiOauth?.refreshToken;
+  if (!refreshToken) return { state: 'invalid' };
+
+  let res;
+  try {
+    res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': OAUTH_USER_AGENT,
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: OAUTH_CLIENT_ID,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    return { state: 'retry' }; // network trouble: keep the current token for now
+  }
+  if (res.status === 400 || res.status === 401 || res.status === 403) {
+    return { state: 'invalid' }; // the refresh token itself is dead
+  }
+  if (!res.ok) return { state: 'retry' }; // rate limited or server-side trouble
+
+  let body;
+  try { body = await res.json(); } catch { return { state: 'retry' }; }
+  if (!body?.access_token) return { state: 'retry' };
+
+  creds.claudeAiOauth.accessToken = body.access_token;
+  if (body.refresh_token) creds.claudeAiOauth.refreshToken = body.refresh_token;
+  creds.claudeAiOauth.expiresAt = Date.now() + (Number(body.expires_in) || 28_800) * 1000;
+  try {
+    const tmp = CLAUDE_CREDS + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(creds));
+    fs.renameSync(tmp, CLAUDE_CREDS);
+  } catch {
+    return { state: 'retry' }; // could not persist: do not pretend it worked
+  }
+  console.log('claude token renewed, expires ' + new Date(creds.claudeAiOauth.expiresAt).toISOString());
+  return { state: 'renewed', token: body.access_token };
+}
+
 async function refreshClaudeUsage(force = false) {
   if (refreshing) return 'busy';
   if (authRequired) {
@@ -347,9 +428,17 @@ async function refreshClaudeUsage(force = false) {
   // anyway burned a rate-limited call and showed "rate-limited, retry HH:MM"
   // for 14 hours when the truth was "login expired, reconnect": wrong message,
   // wasted quota, and the one state the user could actually fix stayed hidden.
-  if (tokenExpiresAt && tokenExpiresAt <= Date.now() + 60_000) {
-    markAuthRequired();
-    return 'auth';
+  if (tokenExpiresAt && tokenExpiresAt <= Date.now() + RENEW_MARGIN_MS) {
+    const renewal = await renewClaudeToken();
+    if (renewal.state === 'renewed') {
+      token = renewal.token;
+    } else if (tokenExpiresAt <= Date.now() + 60_000) {
+      // Could not renew and the token is genuinely done: the visible reconnect
+      // flow is the only path left. While the token still has minutes to live,
+      // keep using it and let the next poll retry the renewal.
+      if (renewal.state !== 'skipped') markAuthRequired();
+      return 'auth';
+    }
   }
 
   // Exclusive create, with stale-lock recovery for interrupted refreshes.

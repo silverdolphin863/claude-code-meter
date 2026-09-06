@@ -131,6 +131,102 @@ assert.equal(
   usageContentKey({ server_time_ms: 2, x: 5 }),
   'the content key must ignore volatile fields',
 );
+{
+  // End to end: a token past its expiry stamp must be renewed with the refresh
+  // token and the fresh access token used immediately, with the rotated
+  // refresh token persisted. This is what ends the every-morning "login
+  // expired" ritual: the CLI only renews when a session runs, so overnight the
+  // meter must do it itself.
+  const os2 = await import('node:os');
+  const pathm = await import('node:path');
+  const fss = await import('node:fs');
+  const root = fss.mkdtempSync(pathm.join(os2.tmpdir(), 'ccm-renew-'));
+  fss.mkdirSync(pathm.join(root, '.claude'), { recursive: true });
+  fss.writeFileSync(pathm.join(root, '.claude', '.credentials.json'), JSON.stringify({
+    keepMe: 'unrelated top-level field',
+    claudeAiOauth: { accessToken: 'stale-token', refreshToken: 'refresh-1', expiresAt: Date.now() - 1000 },
+  }));
+
+  let oauthCalls = 0;
+  const oauthMock = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      oauthCalls++;
+      const body = JSON.parse(raw);
+      assert.equal(body.grant_type, 'refresh_token');
+      assert.equal(body.refresh_token, 'refresh-1');
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ access_token: 'fresh-token', refresh_token: 'refresh-2', expires_in: 28800 }));
+    });
+  });
+  await new Promise((r) => oauthMock.listen(0, '127.0.0.1', r));
+
+  const renewPort = await new Promise((resolve, reject) => {
+    const probe = http.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const assigned = probe.address().port;
+      probe.close(() => resolve(assigned));
+    });
+  });
+
+  let usageAuth = null;
+  const usageMock = http.createServer((req, res) => {
+    usageAuth = req.headers.authorization;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ limits: [{ kind: 'session', percent: 7, resets_at: new Date(Date.now() + 3600000).toISOString() }] }));
+  });
+  await new Promise((r) => usageMock.listen(0, '127.0.0.1', r));
+
+  const child2 = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: root,
+      CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
+      CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
+      CCMETER_CODEX_LIVE: '0',
+      PORT: String(renewPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out2 = '';
+  child2.stdout.on('data', (c) => { out2 += c; });
+  child2.stderr.on('data', (c) => { out2 += c; });
+  try {
+    const deadline = Date.now() + 8000;
+    let renewed = false;
+    while (!renewed && Date.now() < deadline) {
+      // The server renews lazily, on a usage request, the way the widget polls.
+      try { await fetch(`http://127.0.0.1:${renewPort}/usage.json`); } catch { /* booting */ }
+      await new Promise((r) => setTimeout(r, 150));
+      try {
+        const saved = JSON.parse(fss.readFileSync(pathm.join(root, '.claude', '.credentials.json'), 'utf8'));
+        renewed = saved.claudeAiOauth.accessToken === 'fresh-token';
+      } catch { /* mid-rename */ }
+    }
+    assert(renewed, 'renewal never rewrote credentials: ' + out2.slice(-400));
+    const saved = JSON.parse(fss.readFileSync(pathm.join(root, '.claude', '.credentials.json'), 'utf8'));
+    assert.equal(saved.claudeAiOauth.refreshToken, 'refresh-2', 'a rotated refresh token must be persisted');
+    assert.equal(saved.keepMe, 'unrelated top-level field', 'unrelated credential fields must survive the rewrite');
+    assert(saved.claudeAiOauth.expiresAt > Date.now() + 6 * 3600000, 'the new expiry stamp must be recorded');
+    const cacheDeadline = Date.now() + 5000;
+    let cached = false;
+    while (!cached && Date.now() < cacheDeadline) {
+      await new Promise((r) => setTimeout(r, 150));
+      cached = fss.existsSync(pathm.join(root, '.claude', 'usage-cache.json'));
+    }
+    assert(cached, 'the renewed token was never used to fetch usage: ' + out2.slice(-400));
+    assert.equal(usageAuth, 'Bearer fresh-token', 'the usage call must carry the renewed token, not the stale one');
+    assert.equal(oauthCalls, 1, 'renewal must happen exactly once, not per poll');
+  } finally {
+    child2.kill();
+    oauthMock.close();
+    usageMock.close();
+  }
+  console.log('token renewal: PASS');
+}
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
 // A window whose reset time has passed is dropped rather than shown with the
 // previous window's percentage. It must not trigger the former two-minute
@@ -167,8 +263,12 @@ assert.match(serverSource, /manual_refresh: manualRefresh/,
 // spent a rate-limited call and told the user "rate-limited, retry HH:MM" for
 // 14 hours when the truth was "login expired". The expiry check must run
 // BEFORE any network call, and the strip must name the auth state first.
-assert.match(serverSource, /tokenExpiresAt && tokenExpiresAt <= Date\.now\(\) \+ 60_000/,
-  'an expired token must short-circuit to the reconnect flow without spending a rate-limited call');
+assert.match(serverSource, /tokenExpiresAt && tokenExpiresAt <= Date\.now\(\) \+ RENEW_MARGIN_MS/,
+  'a token near expiry must be renewed before any usage call is attempted');
+assert.match(serverSource, /renewal\.state === 'renewed'/,
+  'a successful renewal must be used immediately instead of reporting login expired');
+assert.match(serverSource, /if \(renewal\.state !== 'skipped'\) markAuthRequired\(\);/,
+  'a failed renewal on a dead token must fall back to the visible reconnect flow, never a network call');
 const widgetSource = await fs.readFile(new URL('./public/index.html', import.meta.url), 'utf8');
 assert.match(widgetSource, /claudeAuthRequired\(\)[\s\S]{0,200}login expired[\s\S]{0,400}else if \(blocked\)/,
   'the strip must name an expired login, and prefer it over the rate-limit notice');
