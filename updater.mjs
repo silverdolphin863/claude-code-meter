@@ -11,6 +11,7 @@
 
 import { app, dialog, shell } from 'electron';
 import electronUpdater from 'electron-updater';
+import { isNewerReleaseVersion } from './update-version.mjs';
 
 const { autoUpdater } = electronUpdater;
 
@@ -35,6 +36,7 @@ export function canCheck() {
 export async function checkForUpdates() {
   if (busy) return;
   busy = true;
+  let action = 'check';
   // Deliberately unparented: a dialog parented to the main window is anchored
   // to it, and in compact mode that window is a 30px strip glued to the top
   // screen edge, so the dialog appeared jammed against the top. Unparented
@@ -55,12 +57,14 @@ export async function checkForUpdates() {
 
     const result = await autoUpdater.checkForUpdates();
     const version = result?.updateInfo?.version;
-    // updateInfo always comes back; "is there an update" is the version compare.
-    if (!version || version === app.getVersion()) {
+    const currentVersion = app.getVersion();
+    // electron-updater returns the feed's version even when it is older than
+    // the installed app. Only offer a download when the feed is truly newer.
+    if (!isNewerReleaseVersion(version, currentVersion)) {
       await show({
         type: 'info',
         title: 'CC Meter',
-        message: `CC Meter ${app.getVersion()} is up to date.`,
+        message: `CC Meter ${currentVersion} is up to date.`,
         buttons: ['OK'],
       });
       return;
@@ -72,7 +76,7 @@ export async function checkForUpdates() {
     const choice = await show({
       type: 'info',
       title: 'CC Meter',
-      message: `Version ${version} is available. You have ${app.getVersion()}.`,
+      message: `Version ${version} is available. You have ${currentVersion}.`,
       detail: notes || 'Download it now? The app will restart to finish installing.',
       buttons: ['Download', 'View release page', 'Not now'],
       defaultId: 0,
@@ -82,6 +86,7 @@ export async function checkForUpdates() {
     if (choice.response === 1) { shell.openExternal(RELEASES_URL); return; }
     if (choice.response !== 0) return;
 
+    action = 'download';
     await autoUpdater.downloadUpdate();
     const done = await show({
       type: 'info',
@@ -99,7 +104,9 @@ export async function checkForUpdates() {
     await show({
       type: 'error',
       title: 'CC Meter',
-      message: 'Could not check for updates.',
+      message: action === 'download'
+        ? 'Could not download the update.'
+        : 'Could not check for updates.',
       detail: String(err?.message || err),
       buttons: ['OK'],
     });

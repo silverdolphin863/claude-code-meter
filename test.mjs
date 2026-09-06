@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { isNewerReleaseVersion } from './update-version.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,13 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { constrainCompactBounds } from './window-geometry.mjs';
 import { HardwareDisplayController, encodeHardwareUsage, parseHardwareMessage, usageContentKey } from './hardware-display.mjs';
+
+assert.equal(isNewerReleaseVersion('1.1.9', '1.1.8'), true);
+assert.equal(isNewerReleaseVersion('1.1.8', '1.1.8'), false);
+assert.equal(isNewerReleaseVersion('1.1.6', '1.1.8'), false,
+  'an older public release must never be offered as an update');
+assert.throws(() => isNewerReleaseVersion('', '1.1.8'), /invalid version/);
+console.log('update version ordering: PASS');
 
 const workArea = { x: 100, y: 40, width: 1920, height: 1040 };
 assert.deepEqual(
@@ -154,6 +162,16 @@ assert.match(serverSource, /Promise\.all\(\[\s*refreshClaudeUsage\(true\),\s*cod
   'a manual refresh must update Claude and Codex in parallel so the LCD does not time out');
 assert.match(serverSource, /manual_refresh: manualRefresh/,
   'a manual refresh response must explain whether it updated or was safely refused');
+// An access token past its own expiry stamp cannot succeed, yet the endpoint
+// answers it 429 (the edge rate-limiter speaks before auth does). Sending it
+// spent a rate-limited call and told the user "rate-limited, retry HH:MM" for
+// 14 hours when the truth was "login expired". The expiry check must run
+// BEFORE any network call, and the strip must name the auth state first.
+assert.match(serverSource, /tokenExpiresAt && tokenExpiresAt <= Date\.now\(\) \+ 60_000/,
+  'an expired token must short-circuit to the reconnect flow without spending a rate-limited call');
+const widgetSource = await fs.readFile(new URL('./public/index.html', import.meta.url), 'utf8');
+assert.match(widgetSource, /claudeAuthRequired\(\)[\s\S]{0,200}login expired[\s\S]{0,400}else if \(blocked\)/,
+  'the strip must name an expired login, and prefer it over the rate-limit notice');
 const bridgeSource = await fs.readFile(new URL('./scripts/hardware-display-bridge.ps1', import.meta.url), 'utf8');
 assert.match(bridgeSource, /WriteChunkSize = 16/, 'USB bridge must pace serial writes in small chunks');
 assert.match(bridgeSource, /Thread\.Sleep\(WritePauseMs\)/, 'USB bridge must pause between serial chunks');

@@ -335,10 +335,22 @@ async function refreshClaudeUsage(force = false) {
   lastRefreshAttemptAt = Date.now();
 
   let token;
+  let tokenExpiresAt = 0;
   try {
-    token = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth?.accessToken;
+    const oauth = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth;
+    token = oauth?.accessToken;
+    tokenExpiresAt = Number(oauth?.expiresAt) || 0;
   } catch { markAuthRequired(); return 'auth'; }
   if (!token) { markAuthRequired(); return 'auth'; }
+  // A token past its own expiry stamp cannot succeed, but the endpoint answers
+  // it with 429 (the edge rate-limiter speaks before auth does). Sending it
+  // anyway burned a rate-limited call and showed "rate-limited, retry HH:MM"
+  // for 14 hours when the truth was "login expired, reconnect": wrong message,
+  // wasted quota, and the one state the user could actually fix stayed hidden.
+  if (tokenExpiresAt && tokenExpiresAt <= Date.now() + 60_000) {
+    markAuthRequired();
+    return 'auth';
+  }
 
   // Exclusive create, with stale-lock recovery for interrupted refreshes.
   try {

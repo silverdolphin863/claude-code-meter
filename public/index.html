@@ -574,7 +574,11 @@ function render() {
     .filter((t) => typeof t === 'number' && t > Date.now())
     .sort((a, b) => b - a)[0];
   let txt = dataAge < 60 ? '<1m' : fmtAge(dataAge);
-  if (blocked) {
+  // An expired login outranks a rate-limit notice: reconnecting is the one
+  // remedy the user can perform, so it must never hide behind "retry later".
+  if (claudeAuthRequired()) {
+    txt += ' · login expired';
+  } else if (blocked) {
     const at = new Date(blocked);
     txt += ' · rate-limited, retry ' + String(at.getHours()).padStart(2, '0') +
            ':' + String(at.getMinutes()).padStart(2, '0');
