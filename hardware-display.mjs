@@ -8,6 +8,10 @@ const POLL_MS = 10_000;
 // not sent. The heartbeat resends anyway so the link keeps proving itself and
 // the board's own staleness timer (15 minutes) never trips on a quiet account.
 const HEARTBEAT_MS = 60_000;
+// If writes keep going out and nothing comes back, the link is deaf: the board
+// was unplugged, re-enumerated, or the bridge is holding a port that no longer
+// reaches it. Restart the bridge rather than writing into the void forever.
+const ACK_TIMEOUT_MS = 150_000;
 const RESTART_MS = 5_000;
 // The board is busiest right after the port opens (it may still be booting or
 // painting its first screen) and drops serial bytes while it is. Let it settle
@@ -64,6 +68,7 @@ export class HardwareDisplayController {
     this.rejectRetries = 0;
     this.lastKey = null;
     this.lastWriteAt = 0;
+    this.lastAckAt = 0;
     this.state = {
       transport: 'usb',
       connected: false,
@@ -179,20 +184,30 @@ export class HardwareDisplayController {
       const message = parseHardwareMessage(line);
       if (!message) continue;
       if (message.type === 'hello') {
+        // The board announces itself once per boot, and a boot wipes its
+        // snapshot. With no Wi-Fi configured it then shows the setup screen,
+        // which is what the user sees. Its content has not changed, so change
+        // detection would suppress the resend until the heartbeat: clear the
+        // delivered marker and push straight away.
+        this.lastAckAt = Date.now();
+        this.lastKey = null;
         this.emit({
           deviceSeen: true,
           lastSeen: new Date().toISOString(),
           firmware: typeof message.firmware === 'string' ? message.firmware.slice(0, 32) : null,
           model: typeof message.model === 'string' ? message.model.slice(0, 48) : null,
         });
+        this.sendUsage(false);
       } else if (message.type === 'ack') {
         this.rejectRetries = 0;
+        this.lastAckAt = Date.now();
         this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
       } else if (message.type === 'error') {
         // The board answers a payload it could not parse. Dropping that reply
         // silently was why a rejected update looked exactly like an unplugged
         // cable: the reply is itself proof the device is present and talking,
         // so it counts as having seen the device, and it is worth resending.
+        this.lastAckAt = Date.now(); // a complaint still proves it is listening
         const detail = String(message.error || 'display error').slice(0, 64);
         this.emit({
           deviceSeen: true,
@@ -208,6 +223,17 @@ export class HardwareDisplayController {
       }
     }
     if (this.stdout.length > 8192) this.stdout = '';
+  }
+
+  restart() {
+    const child = this.child;
+    this.stop();
+    if (child) { try { child.kill(); } catch { /* already gone */ } }
+    // stop() cleared the timers; start() is what re-opens the serial port.
+    if (this.config.enabled && this.config.transport === 'usb') {
+      this.restartTimer = setTimeout(() => this.start(), RESTART_MS);
+      this.restartTimer.unref?.();
+    }
   }
 
   retryAfterReject() {
@@ -246,6 +272,15 @@ export class HardwareDisplayController {
       this.child.stdin.write(line);
       this.lastKey = key;
       this.lastWriteAt = Date.now();
+      if (!this.lastAckAt) this.lastAckAt = Date.now(); // start the clock at the first write
+      if (Date.now() - this.lastAckAt > ACK_TIMEOUT_MS) {
+        // Nothing has answered in over two minutes of writing. Rebuild the link
+        // instead of leaving the panel frozen on whatever it last drew.
+        this.emit({ deviceSeen: false, error: 'Display stopped responding, reconnecting' });
+        this.lastAckAt = 0;
+        this.lastKey = null;
+        this.restart();
+      }
       this.emit({ lastSent: new Date().toISOString(), error: null });
     } catch {
       this.emit({ error: 'Usage data unavailable' });

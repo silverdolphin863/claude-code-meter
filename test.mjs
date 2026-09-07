@@ -227,6 +227,45 @@ assert.equal(
   }
   console.log('token renewal: PASS');
 }
+{
+  // A board reboot wipes its snapshot, and with no Wi-Fi configured it then
+  // shows the setup screen. Its hello is the only announcement of that, and the
+  // payload content has not changed, so change detection would suppress the
+  // resend until the heartbeat. The panel must be refilled on hello.
+  const writes = [];
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async () => ({ sections: [{ id: 'claude', limits: [{ label: 'Weekly', percent: 5 }] }] }),
+  });
+  controller.child = { stdin: { writable: true, write: (line) => writes.push(line) } };
+
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 1, 'first payload written');
+  await controller.sendUsage(false);
+  assert.equal(writes.length, 1, 'unchanged content is not rewritten');
+
+  controller.consumeStdout('{"type":"hello","firmware":"1.0.9"}' + NEWLINE);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(writes.length, 2, 'a hello must refill the panel even though the content is unchanged');
+  controller.stop();
+}
+{
+  // Writes that are never answered mean the link is deaf: unplugged,
+  // re-enumerated, or a bridge holding a port that no longer reaches the board.
+  // Writing into the void forever leaves the panel frozen, so rebuild the link.
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async () => ({ n: Math.random() }),
+  });
+  let killed = false;
+  controller.child = { stdin: { writable: true, write: () => {} }, kill: () => { killed = true; } };
+  await controller.sendUsage(false);
+  assert.equal(killed, false, 'a healthy link must not be torn down');
+  controller.lastAckAt = Date.now() - 200_000; // no answer for over two minutes
+  await controller.sendUsage(false);
+  assert.equal(killed, true, 'an unanswered link must be rebuilt');
+  controller.stop();
+}
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
 // A window whose reset time has passed is dropped rather than shown with the
 // previous window's percentage. It must not trigger the former two-minute
