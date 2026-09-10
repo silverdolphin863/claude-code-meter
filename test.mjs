@@ -306,8 +306,14 @@ assert.match(serverSource, /tokenExpiresAt && tokenExpiresAt <= Date\.now\(\) \+
   'a token near expiry must be renewed before any usage call is attempted');
 assert.match(serverSource, /renewal\.state === 'renewed'/,
   'a successful renewal must be used immediately instead of reporting login expired');
-assert.match(serverSource, /if \(renewal\.state !== 'skipped'\) markAuthRequired\(\);/,
-  'a failed renewal on a dead token must fall back to the visible reconnect flow, never a network call');
+assert.match(serverSource, /renewal\.state === 'invalid'[\s\S]{0,220}markAuthRequired\(\);/,
+  'only a rejected refresh token may report an expired login');
+assert.match(serverSource, /return 'offline';/,
+  'an unreachable token endpoint must report offline, never an expired login');
+assert.match(serverSource, /setInterval\(\(\) => \{ maybeRenewToken\(\); \}, RENEW_MIN_INTERVAL_MS\)/,
+  'renewal must run on its own ticker, not behind the usage refresh gates');
+assert.doesNotMatch(serverSource, /RENEW_RETRY_MS/,
+  'the flat 20-minute retry must be gone: it kept a resumed laptop offline for 20 minutes');
 const widgetSource = await fs.readFile(new URL('./public/index.html', import.meta.url), 'utf8');
 assert.match(widgetSource, /claudeAuthRequired\(\)[\s\S]{0,200}login expired[\s\S]{0,400}else if \(blocked\)/,
   'the strip must name an expired login, and prefer it over the rate-limit notice');

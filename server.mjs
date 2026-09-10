@@ -323,7 +323,7 @@ function clearRefreshFailure() {
 //   straight back into .credentials.json (atomic temp+rename, all unrelated
 //   fields preserved), exactly as the CLI would.
 // - Renewal is attempted only inside the last RENEW_MARGIN_MS of a token's
-//   life, at most once per RENEW_RETRY_MS, so it adds about three requests per
+//   life, and never more than once a minute, so it adds about three requests per
 //   day to what the CLI already does.
 // - A definitive rejection (invalid_grant and kin) means the refresh token is
 //   dead: fall through to the visible reconnect flow. Rate limiting or network
@@ -335,12 +335,29 @@ const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 // a 403 (error 1010); the CLI product string passes.
 const OAUTH_USER_AGENT = 'claude-code/2.1.234';
 const RENEW_MARGIN_MS = 30 * 60_000;
-const RENEW_RETRY_MS = 20 * 60_000;
-let lastRenewAttemptAt = 0;
+// Renewal used to share one flat 20 minute retry with genuine failures, so a
+// laptop that resumed before its Wi-Fi did sat in "login expired" for twenty
+// minutes every morning. A transient failure now retries in seconds and backs
+// off gently; only the floor stops us hammering.
+const RENEW_MIN_INTERVAL_MS = 60_000;
+const RENEW_TRANSIENT_BACKOFF_MS = 30_000;
+const RENEW_TRANSIENT_MAX_MS = 5 * 60_000;
+let renewNextAttemptAt = 0;
+let renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
+
+function transientRenewalFailure() {
+  delayRenewal(renewTransientBackoff);
+  renewTransientBackoff = Math.min(RENEW_TRANSIENT_MAX_MS, renewTransientBackoff * 2);
+  return { state: 'retry' };
+}
+
+function delayRenewal(ms) {
+  renewNextAttemptAt = Date.now() + ms;
+}
 
 async function renewClaudeToken() {
-  if (Date.now() - lastRenewAttemptAt < RENEW_RETRY_MS) return { state: 'skipped' };
-  lastRenewAttemptAt = Date.now();
+  if (Date.now() < renewNextAttemptAt) return { state: 'skipped' };
+  delayRenewal(RENEW_MIN_INTERVAL_MS); // floor, raised below if this attempt fails
 
   let creds;
   try { creds = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8')); } catch { return { state: 'invalid' }; }
@@ -364,16 +381,19 @@ async function renewClaudeToken() {
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    return { state: 'retry' }; // network trouble: keep the current token for now
+    // No network yet, which is the normal state for the first seconds after a
+    // laptop resumes. This is NOT an expired login and must never be reported
+    // as one: keep the credentials untouched and try again shortly.
+    return transientRenewalFailure();
   }
   if (res.status === 400 || res.status === 401 || res.status === 403) {
     return { state: 'invalid' }; // the refresh token itself is dead
   }
-  if (!res.ok) return { state: 'retry' }; // rate limited or server-side trouble
+  if (!res.ok) return transientRenewalFailure(); // rate limited or server-side trouble
 
   let body;
-  try { body = await res.json(); } catch { return { state: 'retry' }; }
-  if (!body?.access_token) return { state: 'retry' };
+  try { body = await res.json(); } catch { return transientRenewalFailure(); }
+  if (!body?.access_token) return transientRenewalFailure();
 
   creds.claudeAiOauth.accessToken = body.access_token;
   if (body.refresh_token) creds.claudeAiOauth.refreshToken = body.refresh_token;
@@ -383,11 +403,33 @@ async function renewClaudeToken() {
     fs.writeFileSync(tmp, JSON.stringify(creds));
     fs.renameSync(tmp, CLAUDE_CREDS);
   } catch {
-    return { state: 'retry' }; // could not persist: do not pretend it worked
+    return transientRenewalFailure(); // could not persist: do not pretend it worked
   }
+  renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
+  renewNextAttemptAt = 0;
   console.log('claude token renewed, expires ' + new Date(creds.claudeAiOauth.expiresAt).toISOString());
   return { state: 'renewed', token: body.access_token };
 }
+
+// Keeping the login alive is not part of reading usage, and must not inherit
+// its gates. It previously ran only when a usage refresh was due, so a fresh
+// cache, or a rate-limit lockout on the completely separate usage endpoint,
+// silently stopped the token from ever being renewed. This ticker owns it, and
+// firing every minute is also what recovers the moment a resumed machine gets
+// its network back.
+async function maybeRenewToken() {
+  let expiresAt = 0;
+  try {
+    expiresAt = Number(JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth?.expiresAt) || 0;
+  } catch { return; }
+  if (!expiresAt || expiresAt > Date.now() + RENEW_MARGIN_MS) return;
+  const renewal = await renewClaudeToken();
+  if (renewal.state === 'invalid') markAuthRequired();
+  else if (renewal.state === 'renewed' && authRequired) clearRefreshFailure();
+}
+
+const renewTimer = setInterval(() => { maybeRenewToken(); }, RENEW_MIN_INTERVAL_MS);
+renewTimer.unref?.();
 
 async function refreshClaudeUsage(force = false) {
   if (refreshing) return 'busy';
@@ -432,12 +474,17 @@ async function refreshClaudeUsage(force = false) {
     const renewal = await renewClaudeToken();
     if (renewal.state === 'renewed') {
       token = renewal.token;
-    } else if (tokenExpiresAt <= Date.now() + 60_000) {
-      // Could not renew and the token is genuinely done: the visible reconnect
-      // flow is the only path left. While the token still has minutes to live,
-      // keep using it and let the next poll retry the renewal.
-      if (renewal.state !== 'skipped') markAuthRequired();
+    } else if (renewal.state === 'invalid') {
+      // The refresh token itself was rejected. This is the only case that
+      // genuinely requires the user to log in again.
+      markAuthRequired();
       return 'auth';
+    } else if (tokenExpiresAt <= Date.now() + 60_000) {
+      // The token is spent but we could not reach the token endpoint, usually
+      // because the network is not up yet. Sending a dead token would burn a
+      // rate-limited call, and calling it an expired login would be a lie, so
+      // report neither and let the renewal ticker retry in seconds.
+      return 'offline';
     }
   }
 
