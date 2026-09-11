@@ -228,6 +228,103 @@ assert.equal(
   console.log('token renewal: PASS');
 }
 {
+  // The token endpoint rate-limits too, and answers 429 with no Retry-After
+  // (verified against the live endpoint 2026-09-11, while a token 17h dead
+  // could not be renewed and the widget showed 17h-old numbers with no error).
+  // Treating that 429 as a 5-minute transient re-poked a live window twelve
+  // times an hour and kept it alive, and nothing persisted the lockout, so
+  // every restart poked it again immediately. A 429 must buy a long, saved,
+  // VISIBLE pause.
+  const os3 = await import('node:os');
+  const pathm3 = await import('node:path');
+  const fss3 = await import('node:fs');
+  const root = fss3.mkdtempSync(pathm3.join(os3.tmpdir(), 'ccm-429-'));
+  fss3.mkdirSync(pathm3.join(root, '.claude'), { recursive: true });
+  fss3.writeFileSync(pathm3.join(root, '.claude', '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'dead-token', refreshToken: 'refresh-1', expiresAt: Date.now() - 17 * 3600_000 },
+  }));
+
+  let oauthCalls = 0;
+  const oauthMock = http.createServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      oauthCalls++;
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'rate_limit_error' } }));
+    });
+  });
+  await new Promise((r) => oauthMock.listen(0, '127.0.0.1', r));
+
+  let usageCalls = 0;
+  const usageMock = http.createServer((req, res) => {
+    usageCalls++;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ limits: [] }));
+  });
+  await new Promise((r) => usageMock.listen(0, '127.0.0.1', r));
+
+  const env = {
+    ...process.env,
+    CCMETER_HOME: root,
+    CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
+    CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
+    CCMETER_CODEX_LIVE: '0',
+  };
+  const boot = async (port) => {
+    const child = spawn(process.execPath, ['server.mjs'], {
+      cwd: new URL('.', import.meta.url),
+      env: { ...env, PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let log = '';
+    child.stdout.on('data', (c) => { log += c; });
+    child.stderr.on('data', (c) => { log += c; });
+    const deadline = Date.now() + 8000;
+    let body = null;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+      try { body = await (await fetch(`http://127.0.0.1:${port}/usage.json`)).json(); break; } catch { /* booting */ }
+    }
+    return { child, body, log: () => log };
+  };
+
+  const portA = await freePort();
+  const first = await boot(portA);
+  try {
+    // Give the renewal ticker room to retry if it is going to.
+    await new Promise((r) => setTimeout(r, 4000));
+    await fetch(`http://127.0.0.1:${portA}/usage.json`).catch(() => {});
+    assert.equal(oauthCalls, 1,
+      `a 429 must buy a long pause, not a retry loop; the token endpoint saw ${oauthCalls} calls`);
+    assert.equal(usageCalls, 0, 'a token known to be dead must never be sent to the usage endpoint');
+
+    const saved = JSON.parse(fss3.readFileSync(pathm3.join(root, '.claude', '.usage-api-backoff.json'), 'utf8'));
+    const waitMin = (Number(saved.renewNextAttemptAt) - Date.now()) / 60_000;
+    assert(waitMin > 45 && waitMin <= 61,
+      `the renewal lockout must be saved and about an hour long, got ${waitMin.toFixed(1)} min`);
+
+    const body = await (await fetch(`http://127.0.0.1:${portA}/usage.json`)).json();
+    const claude = body.sections.find((x) => x.id === 'claude');
+    assert.match(String(claude.refresh_error), /rate limited/,
+      'the stall must be named, not left as hours-old numbers with no error');
+    assert(Number(claude.refresh_blocked_until) > Date.now(),
+      'the UI needs the retry time, or the refresh button reads as broken');
+  } finally { first.child.kill(); }
+
+  // A restart must inherit the lockout instead of poking the live window again.
+  const portB = await freePort();
+  const second = await boot(portB);
+  try {
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(oauthCalls, 1, 'a restart must inherit the saved renewal lockout, not retry immediately');
+  } finally {
+    second.child.kill();
+    oauthMock.close();
+    usageMock.close();
+  }
+  console.log('token endpoint rate limit: PASS');
+}
+{
   // A board reboot wipes its snapshot, and with no Wi-Fi configured it then
   // shows the setup screen. Its hello is the only announcement of that, and the
   // payload content has not changed, so change detection would suppress the

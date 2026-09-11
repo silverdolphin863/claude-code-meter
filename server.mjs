@@ -198,6 +198,9 @@ let lastRefreshError = null;
 // Retrying on the plain TTL while locked out kept us permanently 429'd and the
 // cache went 18h stale. Never call again before this timestamp.
 let nextAllowedAt = 0;
+// Declared here, not next to the rest of the renewal state further down: the
+// saved-lockout restore below assigns it, and that runs before that point.
+let renewNextAttemptAt = 0;
 let failures = 0;
 let lastRefreshAttemptAt = 0;
 let authRequired = false;
@@ -274,6 +277,11 @@ try {
     failures = Number(saved.failures) || 1;
     lastRefreshError = savedError || 'rate limited';
   }
+  // A renewal lockout outlives the process: without this, every restart reset
+  // the clock to zero and poked a live 429 window on the next tick.
+  if (Number(saved.renewNextAttemptAt) > Date.now()) {
+    renewNextAttemptAt = Number(saved.renewNextAttemptAt);
+  }
 } catch { /* no prior lockout */ }
 
 function saveBackoff() {
@@ -282,6 +290,7 @@ function saveBackoff() {
       nextAllowedAt, failures, error: lastRefreshError,
       authRequired, credentialsMtimeMs: blockedCredentialsMtimeMs,
       cacheMtimeMs: blockedCacheMtimeMs, lastAttemptAt: lastRefreshAttemptAt,
+      renewNextAttemptAt,
     }));
   } catch { /* best effort */ }
 }
@@ -342,8 +351,21 @@ const RENEW_MARGIN_MS = 30 * 60_000;
 const RENEW_MIN_INTERVAL_MS = 60_000;
 const RENEW_TRANSIENT_BACKOFF_MS = 30_000;
 const RENEW_TRANSIENT_MAX_MS = 5 * 60_000;
-let renewNextAttemptAt = 0;
+// The token endpoint rate-limits too, and answers 429 with NO Retry-After
+// (verified 2026-09-11, while a token 17h dead could not be renewed). Treating
+// that as a 5-minute transient made us re-poke a live window twelve times an
+// hour, which is exactly how the usage endpoint once stayed locked out all day.
+// Back off for a full hour instead, and persist it so a restart does not reset
+// the clock and immediately poke it again.
+const RENEW_RATE_LIMIT_MS = 60 * 60_000;
 let renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
+
+function rateLimitedRenewal() {
+  delayRenewal(RENEW_RATE_LIMIT_MS);
+  lastRefreshError = 'token refresh rate limited';
+  saveBackoff();
+  return { state: 'rate_limited' };
+}
 
 function transientRenewalFailure() {
   delayRenewal(renewTransientBackoff);
@@ -389,7 +411,8 @@ async function renewClaudeToken() {
   if (res.status === 400 || res.status === 401 || res.status === 403) {
     return { state: 'invalid' }; // the refresh token itself is dead
   }
-  if (!res.ok) return transientRenewalFailure(); // rate limited or server-side trouble
+  if (res.status === 429) return rateLimitedRenewal();
+  if (!res.ok) return transientRenewalFailure(); // server-side trouble
 
   let body;
   try { body = await res.json(); } catch { return transientRenewalFailure(); }
@@ -407,6 +430,8 @@ async function renewClaudeToken() {
   }
   renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
   renewNextAttemptAt = 0;
+  if (lastRefreshError === 'token refresh rate limited') lastRefreshError = null;
+  saveBackoff();
   console.log('claude token renewed, expires ' + new Date(creds.claudeAiOauth.expiresAt).toISOString());
   return { state: 'renewed', token: body.access_token };
 }
@@ -484,6 +509,7 @@ async function refreshClaudeUsage(force = false) {
       // because the network is not up yet. Sending a dead token would burn a
       // rate-limited call, and calling it an expired login would be a lie, so
       // report neither and let the renewal ticker retry in seconds.
+      if (renewNextAttemptAt <= Date.now()) lastRefreshError = 'token refresh unreachable';
       return 'offline';
     }
   }
@@ -578,13 +604,24 @@ function claudeSection() {
   } catch (e) {
     out.error = 'usage-cache.json unreadable: ' + e.code;
   }
+  // No cache at all leaves stale_ms null, and `null >= TTL` is false, which
+  // suppressed the reason in exactly the case where the user has nothing on
+  // screen to read. A missing cache is maximally stale, not fresh.
+  const staleEnoughToExplain = out.stale_ms === null || out.stale_ms >= REFRESH_TTL_MS;
   if (authRequired) out.refresh_error = 'auth_required';
-  else if (lastRefreshError && out.stale_ms >= REFRESH_TTL_MS) out.refresh_error = lastRefreshError;
+  else if (lastRefreshError && staleEnoughToExplain) out.refresh_error = lastRefreshError;
   // When the API has us locked out, the UI needs the release time, not just the
   // error string: a refresh click during the lockout is refused on purpose (one
   // call into a live 429 window restarts it), and refusing without saying when
   // it becomes worth clicking again reads as a broken button.
   if (nextAllowedAt > Date.now()) out.refresh_blocked_until = nextAllowedAt;
+  // Same reasoning for the token endpoint: a refresh click while the renewal is
+  // locked out cannot do anything, so say what is stuck and until when instead
+  // of leaving hours-old numbers on screen with no explanation.
+  else if (renewNextAttemptAt > Date.now() && staleEnoughToExplain) {
+    out.refresh_error = lastRefreshError || 'token refresh rate limited';
+    out.refresh_blocked_until = renewNextAttemptAt;
+  }
   return out;
 }
 
