@@ -410,6 +410,76 @@ assert.equal(
   console.log('orphaned credentials give-up: PASS');
 }
 {
+  // The refresh host must be derived from ANTHROPIC_BASE_URL, the way the CLI
+  // does (`baseURL + "/v1/oauth/token"`), NOT hardcoded. It was hardcoded to
+  // platform.claude.com, which answers every refresh with 429 without looking
+  // at the credential, so no token this program ever held could be renewed and
+  // the login died every night. Verified 2026-09-11: identical request,
+  // platform.claude.com -> 429, api.anthropic.com -> 200.
+  const os5 = await import('node:os');
+  const pathm5 = await import('node:path');
+  const fss5 = await import('node:fs');
+  const root = fss5.mkdtempSync(pathm5.join(os5.tmpdir(), 'ccm-host-'));
+  fss5.mkdirSync(pathm5.join(root, '.claude'), { recursive: true });
+  fss5.writeFileSync(pathm5.join(root, '.claude', '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'stale', refreshToken: 'refresh-1', expiresAt: Date.now() - 1000 },
+  }));
+
+  let seenPath = null;
+  let seenBeta = null;
+  const apiMock = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      if (req.url.includes('oauth')) {
+        seenPath = req.url;
+        seenBeta = req.headers['anthropic-beta'];
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ access_token: 'fresh', refresh_token: 'refresh-2', expires_in: 28800 }));
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ limits: [] }));
+    });
+  });
+  await new Promise((r) => apiMock.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${apiMock.address().port}`;
+
+  const port = await freePort();
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: root,
+      // Deliberately NOT setting CCMETER_OAUTH_TOKEN_URL: that override would
+      // hide the very bug this test exists to catch.
+      CCMETER_OAUTH_TOKEN_URL: '',
+      ANTHROPIC_BASE_URL: base,
+      CCMETER_USAGE_API: `${base}/usage`,
+      CCMETER_CODEX_LIVE: '0',
+      PORT: String(port),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    const deadline = Date.now() + 10000;
+    while (!seenPath && Date.now() < deadline) {
+      try { await fetch(`http://127.0.0.1:${port}/usage.json`); } catch { /* booting */ }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.equal(seenPath, '/v1/oauth/token',
+      'the refresh must go to ANTHROPIC_BASE_URL + /v1/oauth/token, not a hardcoded host');
+    assert.equal(seenBeta, 'oauth-2025-04-20',
+      'the refresh must carry the anthropic-beta header the CLI sends');
+    const saved = JSON.parse(fss5.readFileSync(pathm5.join(root, '.claude', '.credentials.json'), 'utf8'));
+    assert.equal(saved.claudeAiOauth.refreshToken, 'refresh-2',
+      'the rotated refresh token must be persisted, or the next renewal uses a spent one');
+  } finally {
+    child.kill();
+    apiMock.close();
+  }
+  console.log('refresh host derivation: PASS');
+}
+{
   // A board reboot wipes its snapshot, and with no Wi-Fi configured it then
   // shows the setup screen. Its hello is the only announcement of that, and the
   // payload content has not changed, so change detection would suppress the

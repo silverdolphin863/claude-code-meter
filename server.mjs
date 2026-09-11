@@ -345,12 +345,27 @@ function clearRefreshFailure() {
 // - A definitive rejection (invalid_grant and kin) means the refresh token is
 //   dead: fall through to the visible reconnect flow. Rate limiting or network
 //   trouble means try again next poll, with the still-valid token kept in use.
+// The host is NOT hardcoded, and getting this wrong is what made every renewal
+// this program ever attempted fail. The CLI builds the URL as
+// `baseURL + "/v1/oauth/token"`, where baseURL is ANTHROPIC_BASE_URL and
+// defaults to api.anthropic.com. We previously posted to
+// platform.claude.com/v1/oauth/token, a string that does appear in the CLI
+// binary but belongs to the browser authorize flow, not this grant. That host
+// answers EVERY refresh with 429 rate_limit_error without ever looking at the
+// credential, which is why a deliberately bogus refresh token and a token
+// issued two minutes earlier produced identical responses. Verified
+// 2026-09-11: same token, same body, platform.claude.com -> 429,
+// api.anthropic.com -> 200 with a rotated refresh token.
+const OAUTH_BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com')
+  .replace(/\/+$/, '');
 const OAUTH_TOKEN_URL = process.env.CCMETER_OAUTH_TOKEN_URL
-  || 'https://platform.claude.com/v1/oauth/token';
+  || OAUTH_BASE_URL + '/v1/oauth/token';
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+// The CLI sends this on the refresh request too, not only on usage reads.
+const OAUTH_BETA = 'oauth-2025-04-20';
 // Cloudflare fronts the token endpoint and blocks generic client strings with
 // a 403 (error 1010); the CLI product string passes.
-const OAUTH_USER_AGENT = 'claude-code/2.1.234';
+const OAUTH_USER_AGENT = 'claude-code/2.1.259';
 const RENEW_MARGIN_MS = 30 * 60_000;
 // Renewal used to share one flat 20 minute retry with genuine failures, so a
 // laptop that resumed before its Wi-Fi did sat in "login expired" for twenty
@@ -427,6 +442,7 @@ async function renewClaudeToken() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'anthropic-beta': OAUTH_BETA,
         'User-Agent': OAUTH_USER_AGENT,
         Accept: 'application/json',
       },
