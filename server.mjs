@@ -201,6 +201,10 @@ let nextAllowedAt = 0;
 // Declared here, not next to the rest of the renewal state further down: the
 // saved-lockout restore below assigns it, and that runs before that point.
 let renewNextAttemptAt = 0;
+// When the token has been dead this long and renewal has never once succeeded,
+// say "reconnect" instead of "retry HH:MM", whatever the server's stated
+// reason. See RENEW_GIVE_UP_MS below for why the reason cannot be trusted.
+let renewFailingSince = 0;
 let failures = 0;
 let lastRefreshAttemptAt = 0;
 let authRequired = false;
@@ -282,6 +286,9 @@ try {
   if (Number(saved.renewNextAttemptAt) > Date.now()) {
     renewNextAttemptAt = Number(saved.renewNextAttemptAt);
   }
+  // The give-up clock must survive restarts too, or an app that restarts every
+  // few hours never reaches the threshold and retries a dead login forever.
+  renewFailingSince = Number(saved.renewFailingSince) || 0;
 } catch { /* no prior lockout */ }
 
 function saveBackoff() {
@@ -290,7 +297,7 @@ function saveBackoff() {
       nextAllowedAt, failures, error: lastRefreshError,
       authRequired, credentialsMtimeMs: blockedCredentialsMtimeMs,
       cacheMtimeMs: blockedCacheMtimeMs, lastAttemptAt: lastRefreshAttemptAt,
-      renewNextAttemptAt,
+      renewNextAttemptAt, renewFailingSince,
     }));
   } catch { /* best effort */ }
 }
@@ -307,6 +314,7 @@ function markAuthRequired() {
 }
 
 function clearRefreshFailure() {
+  renewFailingSince = 0;
   authRequired = false;
   authBlockedAt = 0;
   blockedCredentialsMtimeMs = 0;
@@ -358,6 +366,17 @@ const RENEW_TRANSIENT_MAX_MS = 5 * 60_000;
 // Back off for a full hour instead, and persist it so a restart does not reset
 // the clock and immediately poke it again.
 const RENEW_RATE_LIMIT_MS = 60 * 60_000;
+// The token endpoint masks every failure as 429: a deliberately bogus refresh
+// token gets the same "rate_limit_error" as a good one (tested 2026-09-11), so
+// the status code can never tell a throttle from a dead credential and the
+// 400/401/403 branch above is effectively unreachable. Time is the only signal
+// left. This machine runs Claude Code inside the desktop app, which owns its
+// own OAuth session and does NOT maintain ~/.claude/.credentials.json, so that
+// file can sit orphaned for days while we retry an unrotatable refresh token
+// forever. After two hours of failing to renew an already-expired token the
+// cause stops mattering: the user's remedy is to log in again, and saying
+// "rate-limited, retry 15:04" hides the one action that actually works.
+const RENEW_GIVE_UP_MS = 2 * 60 * 60_000;
 let renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
 
 function rateLimitedRenewal() {
@@ -373,6 +392,22 @@ function transientRenewalFailure() {
   return { state: 'retry' };
 }
 
+// Renewal replaces the credentials file with a rename, so a read racing that
+// rename can fail for a few milliseconds, and on Windows it fails with EPERM
+// or EBUSY as readily as ENOENT. Every caller below treated a failed read as a
+// dead login, which latches "login expired" for fifteen minutes on a perfectly
+// healthy account. Retry briefly before believing it. A genuinely missing file
+// only costs two 25ms waits.
+async function readClaudeCreds() {
+  for (let attempt = 0; ; attempt++) {
+    try { return JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8')); }
+    catch (err) {
+      if (attempt >= 2) throw err;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
+
 function delayRenewal(ms) {
   renewNextAttemptAt = Date.now() + ms;
 }
@@ -382,7 +417,7 @@ async function renewClaudeToken() {
   delayRenewal(RENEW_MIN_INTERVAL_MS); // floor, raised below if this attempt fails
 
   let creds;
-  try { creds = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8')); } catch { return { state: 'invalid' }; }
+  try { creds = await readClaudeCreds(); } catch { return transientRenewalFailure(); }
   const refreshToken = creds?.claudeAiOauth?.refreshToken;
   if (!refreshToken) return { state: 'invalid' };
 
@@ -431,6 +466,7 @@ async function renewClaudeToken() {
   renewTransientBackoff = RENEW_TRANSIENT_BACKOFF_MS;
   renewNextAttemptAt = 0;
   if (lastRefreshError === 'token refresh rate limited') lastRefreshError = null;
+  renewFailingSince = 0;
   saveBackoff();
   console.log('claude token renewed, expires ' + new Date(creds.claudeAiOauth.expiresAt).toISOString());
   return { state: 'renewed', token: body.access_token };
@@ -445,15 +481,39 @@ async function renewClaudeToken() {
 async function maybeRenewToken() {
   let expiresAt = 0;
   try {
-    expiresAt = Number(JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth?.expiresAt) || 0;
+    expiresAt = Number((await readClaudeCreds())?.claudeAiOauth?.expiresAt) || 0;
   } catch { return; }
-  if (!expiresAt || expiresAt > Date.now() + RENEW_MARGIN_MS) return;
+  if (!expiresAt || expiresAt > Date.now() + RENEW_MARGIN_MS) {
+    // A healthy token means whatever was failing has been resolved, usually by
+    // the user logging in while the app was closed. Without this the clock
+    // stays ancient and the next single failed renewal trips the give-up
+    // threshold immediately, reporting a dead login after one bad request.
+    if (renewFailingSince) { renewFailingSince = 0; saveBackoff(); }
+    return;
+  }
   const renewal = await renewClaudeToken();
-  if (renewal.state === 'invalid') markAuthRequired();
-  else if (renewal.state === 'renewed' && authRequired) clearRefreshFailure();
+  if (renewal.state === 'renewed') {
+    if (authRequired) clearRefreshFailure();
+    return;
+  }
+  if (renewal.state === 'invalid') { markAuthRequired(); return; }
+
+  // Every other outcome is unclassifiable, so fall back to elapsed time. Only
+  // count it once the token is genuinely spent: inside the 30-minute margin it
+  // is still usable and a failed renewal is not yet the user's problem.
+  if (expiresAt > Date.now()) return;
+  if (!renewFailingSince) { renewFailingSince = Date.now(); saveBackoff(); }
+  else if (Date.now() - renewFailingSince >= RENEW_GIVE_UP_MS && !authRequired) {
+    markAuthRequired();
+  }
 }
 
-const renewTimer = setInterval(() => { maybeRenewToken(); }, RENEW_MIN_INTERVAL_MS);
+// Once at startup, not only after the first interval: a machine that just
+// resumed, or an app that just updated, should not sit a whole minute with a
+// dead token before anything tries. renewClaudeToken has its own floor, so
+// this cannot become an extra request on a healthy login.
+maybeRenewToken().catch(() => {});
+const renewTimer = setInterval(() => { maybeRenewToken().catch(() => {}); }, RENEW_MIN_INTERVAL_MS);
 renewTimer.unref?.();
 
 async function refreshClaudeUsage(force = false) {
@@ -485,7 +545,7 @@ async function refreshClaudeUsage(force = false) {
   let token;
   let tokenExpiresAt = 0;
   try {
-    const oauth = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth;
+    const oauth = (await readClaudeCreds())?.claudeAiOauth;
     token = oauth?.accessToken;
     tokenExpiresAt = Number(oauth?.expiresAt) || 0;
   } catch { markAuthRequired(); return 'auth'; }

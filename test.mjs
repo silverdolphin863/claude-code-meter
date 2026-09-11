@@ -211,9 +211,13 @@ assert.equal(
     assert.equal(saved.claudeAiOauth.refreshToken, 'refresh-2', 'a rotated refresh token must be persisted');
     assert.equal(saved.keepMe, 'unrelated top-level field', 'unrelated credential fields must survive the rewrite');
     assert(saved.claudeAiOauth.expiresAt > Date.now() + 6 * 3600000, 'the new expiry stamp must be recorded');
-    const cacheDeadline = Date.now() + 5000;
+    const cacheDeadline = Date.now() + 8000;
     let cached = false;
     while (!cached && Date.now() < cacheDeadline) {
+      // Keep polling, the way the widget does. A single request is not enough:
+      // the startup renewal may still be in flight when it lands, and that
+      // request correctly reports "offline" rather than sending a dead token.
+      try { await fetch(`http://127.0.0.1:${renewPort}/usage.json`); } catch { /* ignore */ }
       await new Promise((r) => setTimeout(r, 150));
       cached = fss.existsSync(pathm.join(root, '.claude', 'usage-cache.json'));
     }
@@ -325,6 +329,87 @@ assert.equal(
   console.log('token endpoint rate limit: PASS');
 }
 {
+  // The token endpoint masks every failure as 429, including for a refresh
+  // token that is provably nonsense, so no status code can tell a throttle
+  // from a dead credential. On a machine where Claude Code runs inside the
+  // desktop app, ~/.claude/.credentials.json is not maintained by anything,
+  // and CC Meter would retry an unrotatable token forever while the strip
+  // said "rate-limited, retry HH:MM" and hid the one fix that works.
+  // After RENEW_GIVE_UP_MS of failing to renew a spent token, say reconnect.
+  const os4 = await import('node:os');
+  const pathm4 = await import('node:path');
+  const fss4 = await import('node:fs');
+  const root = fss4.mkdtempSync(pathm4.join(os4.tmpdir(), 'ccm-giveup-'));
+  fss4.mkdirSync(pathm4.join(root, '.claude'), { recursive: true });
+  fss4.writeFileSync(pathm4.join(root, '.claude', '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'dead', refreshToken: 'orphaned', expiresAt: Date.now() - 20 * 3600_000 },
+  }));
+  // Three hours of failed renewals already behind us, and saved, the way a
+  // restart would inherit it.
+  fss4.writeFileSync(pathm4.join(root, '.claude', '.usage-api-backoff.json'), JSON.stringify({
+    renewFailingSince: Date.now() - 3 * 3600_000, renewNextAttemptAt: 0,
+  }));
+
+  const oauthMock = http.createServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'rate_limit_error' } }));
+    });
+  });
+  await new Promise((r) => oauthMock.listen(0, '127.0.0.1', r));
+  const usageMock = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ limits: [] }));
+  });
+  await new Promise((r) => usageMock.listen(0, '127.0.0.1', r));
+
+  const port = await freePort();
+  const child = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: root,
+      CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
+      CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
+      CCMETER_CODEX_LIVE: '0',
+      PORT: String(port),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log = '';
+  child.stdout.on('data', (c) => { log += c; });
+  child.stderr.on('data', (c) => { log += c; });
+  try {
+    let claude = null;
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const body = await (await fetch(`http://127.0.0.1:${port}/usage.json`)).json();
+        claude = body.sections.find((x) => x.id === 'claude');
+        if (claude?.auth_required) break;
+      } catch { /* booting */ }
+    }
+    assert(claude?.auth_required === true,
+      'after hours of unrenewable failures on a spent token the widget must say reconnect, '
+      + 'not hide behind a retry time: ' + JSON.stringify(claude) + log.slice(-300));
+    assert.equal(claude.refresh_error, 'auth_required',
+      'the reported reason must be the login, not the rate limit');
+
+    // It must still be self-healing: the hourly retry keeps running, so a
+    // throttle that does lift recovers without the user doing anything.
+    const saved = JSON.parse(fss4.readFileSync(pathm4.join(root, '.claude', '.usage-api-backoff.json'), 'utf8'));
+    assert(Number(saved.renewFailingSince) > 0,
+      'the give-up clock must stay saved so a restart does not start it over');
+  } finally {
+    child.kill();
+    oauthMock.close();
+    usageMock.close();
+  }
+  console.log('orphaned credentials give-up: PASS');
+}
+{
   // A board reboot wipes its snapshot, and with no Wi-Fi configured it then
   // shows the setup screen. Its hello is the only announcement of that, and the
   // payload content has not changed, so change detection would suppress the
@@ -407,7 +492,7 @@ assert.match(serverSource, /renewal\.state === 'invalid'[\s\S]{0,220}markAuthReq
   'only a rejected refresh token may report an expired login');
 assert.match(serverSource, /return 'offline';/,
   'an unreachable token endpoint must report offline, never an expired login');
-assert.match(serverSource, /setInterval\(\(\) => \{ maybeRenewToken\(\); \}, RENEW_MIN_INTERVAL_MS\)/,
+assert.match(serverSource, /setInterval\(\(\) => \{ maybeRenewToken\(\)[\s\S]{0,20}\}, RENEW_MIN_INTERVAL_MS\)/,
   'renewal must run on its own ticker, not behind the usage refresh gates');
 assert.doesNotMatch(serverSource, /RENEW_RETRY_MS/,
   'the flat 20-minute retry must be gone: it kept a resumed laptop offline for 20 minutes');
