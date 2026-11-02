@@ -104,6 +104,25 @@ rather not trust a binary from a stranger on the internet, build it yourself
 from the source below. That is the honest answer and it is why the source is
 here.
 
+## Start with Windows
+
+Off by default. Turn it on from either **Settings -> Behavior -> Start with
+Windows** or the tray menu, and CC Meter launches when you log in.
+
+It writes a single per-user entry, `CC Meter`, under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing at the installed
+executable. Nothing runs as administrator, nothing is written outside your own
+user, and no service is installed. The entry survives reinstalling CC Meter,
+since the install path does not change.
+
+You can also turn it off from Windows itself, in **Task Manager -> Startup
+apps**. The checkbox reads the real setting each time it is shown, so it follows
+what you do there instead of insisting it is still on. An entry left behind by an
+older install in a different folder is ignored rather than reported as on.
+
+In a development run (`npm start`) the option is disabled, because an
+unpackaged run would register `electron.exe` rather than CC Meter.
+
 ## Updates
 
 The tray menu has **Check for updates...**, and that is the only thing that

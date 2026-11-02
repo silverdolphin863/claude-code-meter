@@ -98,6 +98,9 @@
   <h2>Behavior</h2>
   <label><input type="checkbox" id="ah"> Auto-hide the strip until hovered</label>
   <label><input type="checkbox" id="rt"> Show reset time in the strip</label>
+  <label><input type="checkbox" id="autostart"> Start with Windows</label>
+  <p class="hint" id="autostartHint">CC Meter launches at login. Removing it from
+  Task Manager's Startup tab unticks this too.</p>
 
   <h2>Hardware display</h2>
   <label><input type="checkbox" id="panelEnabled"> Enable ESP32 display</label>
@@ -206,6 +209,16 @@ window.widget.onState((s) => {
   panel = s.panel || panel;
   document.getElementById('ah').checked = Boolean(s.autohide);
   document.getElementById('rt').checked = prefs.showReset !== false;
+  // A dev run must not be able to register autostart, so the box is disabled
+  // and the hint says why rather than leaving a dead control with no reason.
+  if (s.autostart) {
+    const box = document.getElementById('autostart');
+    box.checked = Boolean(s.autostart.enabled);
+    box.disabled = !s.autostart.supported;
+    document.getElementById('autostartHint').textContent = s.autostart.supported
+      ? "CC Meter launches at login. Removing it from Task Manager's Startup tab unticks this too."
+      : 'Only available in the installed app, not in a development run.';
+  }
   paint();
   paintPanel();
 });
@@ -281,6 +294,7 @@ for (const [id, box] of [['claude', 'mClaude'], ['codex', 'mCodex']]) {
   };
 }
 document.getElementById('ah').onchange = (e) => window.widget.setAutohide(e.target.checked);
+document.getElementById('autostart').onchange = (e) => window.widget.setAutostart(e.target.checked);
 document.getElementById('rt').onchange = (e) => {
   prefs.showReset = e.target.checked;
   window.widget.setPrefs(prefs);

@@ -529,9 +529,28 @@ assert.match(mainSource, /label: 'Start with Windows'[\s\S]{0,120}enabled: app\.
 // The checkbox reads the OS, never a persisted copy: the user can also remove
 // the entry from Task Manager, and a cached "on" would then be a lie.
 assert.match(mainSource, /checked: startsWithWindows\(\)/,
-  'the autostart checkbox must read its state from getLoginItemSettings');
+  'the autostart checkbox must read its state from the OS');
 assert.doesNotMatch(mainSource, /persist\(\{[^}]*openAtLogin/,
   'autostart state must not be mirrored into the persisted settings file');
+// The state is read from the registry, NOT from app.getLoginItemSettings():
+// that API compares the stored command against its own process.execPath and
+// ignores the path option on read, so it reports false for an entry it wrote
+// itself (measured 2026-11-02). Writing through the API is still correct.
+assert.match(mainSource, /function startsWithWindows\(\)[\s\S]{0,400}execFileSync\('reg'/,
+  'autostart state must be read from the registry, not getLoginItemSettings');
+assert.doesNotMatch(mainSource, /startsWithWindows\(\)\s*\{[\s\S]{0,300}getLoginItemSettings/,
+  'getLoginItemSettings must not be used to READ autostart state');
+// The registry value name and build.productName must agree, or autostart works
+// while the checkbox shows unticked and Task Manager lists a different app.
+{
+  const pkg = JSON.parse(await fs.readFile(new URL('./package.json', import.meta.url), 'utf8'));
+  const declared = mainSource.match(/const AUTOSTART_NAME = '([^']+)'/)?.[1];
+  assert.equal(declared, pkg.build.productName,
+    'AUTOSTART_NAME must equal build.productName');
+}
+// A stale entry pointing at an old install path is not this build starting up.
+assert.match(mainSource, /includes\(process\.execPath\.toLowerCase\(\)\)/,
+  'the registry value must be matched against the running executable path');
 console.log('autostart guards: PASS');
 
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');

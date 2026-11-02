@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('widget', {
   compactResize: (width) => ipcRenderer.send('widget:compact-resize', width),
   fullResize: (left, width) => ipcRenderer.send('widget:full-resize', left, width),
   setAutohide: (on) => ipcRenderer.send('widget:autohide', on),
+  setAutostart: (on) => ipcRenderer.send('widget:set-autostart', on),
   setPrefs: (prefs) => ipcRenderer.send('widget:prefs', prefs),
   getPanelStatus: () => ipcRenderer.invoke('widget:get-panel-status'),
   setPanel: (patch) => ipcRenderer.invoke('widget:set-panel', patch),

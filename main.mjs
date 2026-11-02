@@ -3,9 +3,17 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PORT, configurePanelServer, getPanelServerStatus, getPanelUsage } from './server.mjs';
+
+// Module scope, not inside the window closure: pushState() reports the autostart
+// state and can run during setup, before a const declared further down that
+// closure would be initialized.
+const AUTOSTART_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+// Must equal build.productName: that is the value name the installed app and
+// Task Manager's Startup tab both use.
+const AUTOSTART_NAME = 'CC Meter';
 import { HardwareDisplayController } from './hardware-display.mjs';
 import { constrainCompactBounds } from './window-geometry.mjs';
 import { checkForUpdates } from './updater.mjs';
@@ -392,6 +400,7 @@ function createWindow() {
       autohide: Boolean(state.autohide),
       prefs: state.prefs || null,
       panel: hardwareDisplayState(),
+      autostart: { supported: app.isPackaged, enabled: startsWithWindows() },
     };
     win.webContents.send('widget:set-state', payload);
     if (settingsWin && !settingsWin.isDestroyed()) {
@@ -496,22 +505,40 @@ function createWindow() {
 
   // Autostart. The OS is the source of truth, not our own store: the user can
   // also remove the entry from Task Manager's Startup tab, and a checkbox that
-  // kept saying "on" after that would be lying. Reading it back every time the
-  // menu is built costs nothing.
+  // kept saying "on" after that would be lying.
+  //
+  // The state is read from the registry directly rather than from
+  // app.getLoginItemSettings(). That API determines openAtLogin by comparing
+  // the stored command against its OWN process.execPath and ignores the `path`
+  // option on read, so it answers false for any entry not pointing at the
+  // running binary. Measured 2026-11-02: Electron wrote the entry itself and
+  // then reported openAtLogin false for it, with the same name and path passed
+  // back in. Writing still goes through the API, which gets the quoting right.
   //
   // Guarded by isPackaged. A dev run's execPath is electron.exe, so letting it
   // register would put a Run entry on the machine that launches bare Electron
   // at every login, with no way to untick it once the dev run is gone.
   function startsWithWindows() {
     if (!app.isPackaged) return false;
-    try { return Boolean(app.getLoginItemSettings().openAtLogin); } catch { return false; }
+    try {
+      const out = execFileSync('reg', ['query', AUTOSTART_KEY, '/v', AUTOSTART_NAME], {
+        encoding: 'utf8', windowsHide: true, timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      // A leftover entry from an older install path is not this app starting up.
+      return out.toLowerCase().includes(process.execPath.toLowerCase());
+    } catch {
+      return false; // reg exits non-zero when the value is absent
+    }
   }
 
   function setStartWithWindows(enabled) {
     try {
-      app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: [] });
+      app.setLoginItemSettings({
+        openAtLogin: enabled, path: process.execPath, args: [], name: AUTOSTART_NAME,
+      });
     } catch { /* a locked-down registry is not worth crashing over */ }
     buildTrayMenu();
+    pushState();
   }
 
   function buildTrayMenu() {
@@ -733,6 +760,7 @@ function createWindow() {
           autohide: Boolean(state.autohide),
           prefs: state.prefs || null,
           panel: hardwareDisplayState(),
+          autostart: { supported: app.isPackaged, enabled: startsWithWindows() },
         });
       }
     });
@@ -743,6 +771,10 @@ function createWindow() {
     });
   }
   ipcMain.on('widget:open-settings', toggleSettings);
+  ipcMain.on('widget:set-autostart', (_e, enabled) => {
+    if (!app.isPackaged) return; // see startsWithWindows for why
+    setStartWithWindows(Boolean(enabled));
+  });
 
   // Full mode shrink-wraps its content, every time the content changes, not
   // just on first run: the user can no longer drag the height, so the window
