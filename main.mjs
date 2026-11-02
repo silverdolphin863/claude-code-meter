@@ -494,6 +494,26 @@ function createWindow() {
     tray.setToolTip(text.slice(0, 128));
   });
 
+  // Autostart. The OS is the source of truth, not our own store: the user can
+  // also remove the entry from Task Manager's Startup tab, and a checkbox that
+  // kept saying "on" after that would be lying. Reading it back every time the
+  // menu is built costs nothing.
+  //
+  // Guarded by isPackaged. A dev run's execPath is electron.exe, so letting it
+  // register would put a Run entry on the machine that launches bare Electron
+  // at every login, with no way to untick it once the dev run is gone.
+  function startsWithWindows() {
+    if (!app.isPackaged) return false;
+    try { return Boolean(app.getLoginItemSettings().openAtLogin); } catch { return false; }
+  }
+
+  function setStartWithWindows(enabled) {
+    try {
+      app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: [] });
+    } catch { /* a locked-down registry is not worth crashing over */ }
+    buildTrayMenu();
+  }
+
   function buildTrayMenu() {
     if (!tray) return;
     const parked = state.autohide && state.mode === 'compact' && !shown;
@@ -537,6 +557,11 @@ function createWindow() {
       { label: 'Always on top', type: 'checkbox',
         checked: win.isAlwaysOnTop(),
         click: (m) => win.setAlwaysOnTop(m.checked, 'floating') },
+      { type: 'separator' },
+      { label: 'Start with Windows', type: 'checkbox',
+        enabled: app.isPackaged,
+        checked: startsWithWindows(),
+        click: (m) => setStartWithWindows(m.checked) },
       { type: 'separator' },
       { label: 'Settings...', click: () => openSettings() },
       // The ONLY entry point to the updater. Nothing checks on launch, on

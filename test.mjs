@@ -518,6 +518,22 @@ assert.equal(
   assert.equal(killed, true, 'an unanswered link must be rebuilt');
   controller.stop();
 }
+const mainSource = await fs.readFile(new URL('./main.mjs', import.meta.url), 'utf8');
+// Autostart must never register from a dev run. An unpackaged execPath is
+// electron.exe, so dropping this guard would add a Run entry that launches bare
+// Electron at every login, with no tray icon left to untick it from.
+assert.match(mainSource, /function startsWithWindows\(\)\s*\{\s*\n\s*if \(!app\.isPackaged\) return false;/,
+  'startsWithWindows must refuse to report autostart for an unpackaged run');
+assert.match(mainSource, /label: 'Start with Windows'[\s\S]{0,120}enabled: app\.isPackaged/,
+  'the Start with Windows item must be disabled in a dev run');
+// The checkbox reads the OS, never a persisted copy: the user can also remove
+// the entry from Task Manager, and a cached "on" would then be a lie.
+assert.match(mainSource, /checked: startsWithWindows\(\)/,
+  'the autostart checkbox must read its state from getLoginItemSettings');
+assert.doesNotMatch(mainSource, /persist\(\{[^}]*openAtLogin/,
+  'autostart state must not be mirrored into the persisted settings file');
+console.log('autostart guards: PASS');
+
 const serverSource = await fs.readFile(new URL('./server.mjs', import.meta.url), 'utf8');
 // A window whose reset time has passed is dropped rather than shown with the
 // previous window's percentage. It must not trigger the former two-minute
