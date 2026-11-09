@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include "display.h"
+#include "focus_ui.h"
 #include "smooth_font_data.h"
 
 #include <Arduino.h>
@@ -602,6 +603,8 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
     const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
     drawSection(codex, "codex", secondY, codexRowHeight, nowEpochMs);
   }
+
+  uiDrawPageDots(0, kBackground);
 
   // The RGB panel scans the same framebuffer that drawing commands modify.
   // Publish only after the complete frame is composed so the once-per-minute

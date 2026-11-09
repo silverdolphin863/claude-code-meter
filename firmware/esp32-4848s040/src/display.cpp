@@ -1,3 +1,4 @@
+#include "touch_debounce.h"
 #include "display.h"
 
 #include <Arduino.h>
@@ -6,6 +7,8 @@
 #include <Wire.h>
 
 namespace ccmeter {
+
+bool readTouchPoint(int16_t& x, int16_t& y);
 namespace {
 
 constexpr int kBacklightPin = 38;
@@ -95,9 +98,15 @@ void displayFlushRect(int16_t x, int16_t y, int16_t width, int16_t height) {
 }
 
 bool displayReadTouch(int16_t& x, int16_t& y) {
+  static TouchDebounce debounce;
   touch.read();
-  if (!touch.isTouched) return false;
+  int16_t rawX = 0;
+  int16_t rawY = 0;
+  const bool raw = touch.isTouched && readTouchPoint(rawX, rawY);
+  return debounce.update(raw, rawX, rawY, millis(), x, y);
+}
 
+bool readTouchPoint(int16_t& x, int16_t& y) {
   // ROTATION_NORMAL flips both raw GT911 axes inside TAMC_GT911. Reverse both
   // flips here so this board's documented unmirrored touch coordinates line up
   // with the pixels drawn on the LCD.

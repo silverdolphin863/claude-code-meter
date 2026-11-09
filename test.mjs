@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { constrainCompactBounds } from './window-geometry.mjs';
-import { HardwareDisplayController, encodeHardwareUsage, parseHardwareMessage, usageContentKey } from './hardware-display.mjs';
+import { HardwareDisplayController, encodeHardwareUsage, focusEventFromMessage, parseHardwareMessage, usageContentKey } from './hardware-display.mjs';
 
 assert.equal(isNewerReleaseVersion('1.1.9', '1.1.8'), true);
 assert.equal(isNewerReleaseVersion('1.1.8', '1.1.8'), false);
@@ -496,9 +496,34 @@ assert.equal(
   await controller.sendUsage(false);
   assert.equal(writes.length, 1, 'unchanged content is not rewritten');
 
-  controller.consumeStdout('{"type":"hello","firmware":"1.0.9"}' + NEWLINE);
+  controller.consumeStdout('{"type":"hello","firmware":"1.1.0"}' + NEWLINE);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(writes.length, 2, 'a hello must refill the panel even though the content is unchanged');
+  controller.stop();
+}
+{
+  // The panel focus timer has no speaker: its serial events must reach the
+  // host sound player, and nothing else from that line may get through.
+  assert.deepEqual(focusEventFromMessage({ type: 'focus', event: 'start', phase: 'focus', remaining_s: 1500 }),
+    { event: 'start', phase: 'focus', second: null });
+  assert.deepEqual(focusEventFromMessage({ type: 'focus', event: 'tick', phase: 'short', second: 3 }),
+    { event: 'tick', phase: 'short', second: 3 });
+  assert.equal(focusEventFromMessage({ type: 'focus', event: 'tick', second: 11 }), null, 'countdown is 10..1 only');
+  assert.equal(focusEventFromMessage({ type: 'focus', event: 'alert(1)' }), null, 'unknown events are dropped');
+  assert.equal(focusEventFromMessage({ type: 'focus', event: 'done', phase: '<x>' }).phase, 'focus');
+
+  const heard = [];
+  const writes = [];
+  const controller = new HardwareDisplayController({
+    bridgePath: 'unused-in-unit-test',
+    loadUsage: async () => ({ sections: [] }),
+    onFocusEvent: (event) => heard.push(event),
+  });
+  controller.child = { stdin: { writable: true, write: (line) => writes.push(line) } };
+  controller.consumeStdout('{"type":"focus","event":"done","phase":"focus","remaining_s":0}' + NEWLINE +
+    '{"type":"focus","event":"bogus"}' + NEWLINE);
+  assert.deepEqual(heard, [{ event: 'done', phase: 'focus', second: null }]);
+  assert.equal(writes.length, 0, 'a focus event is not a refresh request');
   controller.stop();
 }
 {

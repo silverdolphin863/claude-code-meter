@@ -57,6 +57,9 @@ struct UsageSnapshot {
   bool valid;
   bool hasGeneratedAt;
   bool hasRefreshRetry;
+  // Host's local UTC offset, used by the focus page to reset "today".
+  int16_t utcOffsetMinutes;
+  bool hasUtcOffset;
 };
 
 enum class UsageTone : uint8_t {

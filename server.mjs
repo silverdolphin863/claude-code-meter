@@ -1062,6 +1062,8 @@ function panelPayload(data) {
   return {
     schema: 1,
     server_time_ms: Date.now(),
+    // Local day boundary for the panel's focus timer totals.
+    utc_offset_min: -new Date().getTimezoneOffset(),
     ...data,
     sections: data.sections.map((section) => ({
       ...section,

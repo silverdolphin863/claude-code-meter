@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Focus Timer Preview</title>
+  <style>
+    :root {
+      --bg: #14131a;
+      --card: #1e1c27;
+      --line: #2f2c3b;
+      --ink: #f4f2f9;
+      --muted: #8b85a0;
+      --dim: #625c78;
+      --track: #262332;
+      --focus: #ff7a59;
+      --break: #39d98a;
+      --warn: #ffca3b;
+      --accent: #a78bfa;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #0b0a0f; color: var(--ink); }
+    body {
+      display: flex; flex-direction: column; align-items: center; gap: 18px;
+      padding: 24px 16px 40px;
+      font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+    }
+    .hint { color: var(--muted); font-size: 13px; max-width: 480px; line-height: 1.5; text-align: center; }
+    .hint b { color: var(--ink); font-weight: 600; }
+
+    .lcd {
+      position: relative; width: 480px; height: 480px; max-width: calc(100vw - 32px); aspect-ratio: 1;
+      overflow: hidden; background: var(--bg); border-radius: 6px;
+      box-shadow: 0 0 0 10px #050408, 0 20px 50px rgba(0,0,0,.6);
+      touch-action: pan-y; user-select: none; cursor: grab;
+    }
+    .pages { display: flex; width: 200%; height: 100%; transition: transform 260ms cubic-bezier(.2,.8,.2,1); }
+    .page { width: 50%; height: 100%; position: relative; }
+    .page img { width: 100%; height: 100%; display: block; object-fit: cover; pointer-events: none; }
+
+    .dots { position: absolute; left: 0; right: 0; top: 24px; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
+    .dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); transition: background 200ms, width 200ms; }
+    .dots span.on { background: var(--ink); width: 16px; border-radius: 3px; }
+
+    /* Focus page */
+    .head { position: absolute; top: 18px; left: 22px; right: 22px; display: flex; align-items: center; justify-content: space-between; }
+    .mode { font-size: 15px; font-weight: 600; letter-spacing: .14em; }
+    .mode i { font-style: normal; color: var(--muted); font-weight: 400; letter-spacing: .04em; margin-left: 8px; }
+    .cycle { display: flex; gap: 6px; }
+    .cycle span { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--dim); }
+    .cycle span.done { background: var(--focus); border-color: var(--focus); }
+    .cycle span.now { border-color: var(--focus); }
+
+    .ring { position: absolute; left: 50%; top: 54px; width: 272px; height: 272px; margin-left: -136px; }
+    .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .ring .track { stroke: var(--track); }
+    .ring .arc { stroke: var(--focus); stroke-linecap: round; transition: stroke 300ms; }
+    .ring.break .arc { stroke: var(--break); }
+    .ring.paused .arc { stroke: var(--dim); }
+    .ring.final .arc { animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 50% { stroke: var(--warn); } }
+    /* Digits are centred on the ring by themselves; the state label hangs
+       below them and never shifts the digits. */
+    .time {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      font-size: 70px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums;
+    }
+    .time small {
+      position: absolute; left: 0; right: 0; top: calc(50% + 46px); text-align: center;
+      font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .14em;
+    }
+    .ring.paused .time { color: var(--muted); }
+
+    .controls { position: absolute; left: 0; right: 0; top: 340px; display: flex; justify-content: center; align-items: center; gap: 26px; }
+    .btn {
+      width: 64px; height: 64px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+      background: var(--card); box-shadow: inset 0 0 0 2px var(--line);
+      transition: transform 90ms ease-out, background 120ms;
+    }
+    .btn.main { width: 76px; height: 76px; background: var(--focus); box-shadow: 0 6px 22px rgba(255,122,89,.35); }
+    .ring.break ~ .controls .btn.main { background: var(--break); box-shadow: 0 6px 22px rgba(57,217,138,.30); }
+    .btn:active, .btn.pressed { transform: scale(.88); }
+    .btn svg { width: 26px; height: 26px; fill: var(--ink); }
+    .btn.main svg { width: 30px; height: 30px; fill: #14131a; }
+
+    .today { position: absolute; left: 22px; right: 22px; bottom: 22px; display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+    .today b { color: var(--ink); font-weight: 600; }
+
+    .flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: var(--focus); }
+    .flash.go { animation: flash 900ms ease-out; }
+    .flash.break { background: var(--break); }
+    @keyframes flash { 0% { opacity: .55; } 100% { opacity: 0; } }
+
+    .speed { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; }
+    .speed button { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <p class="hint"><b>Swipe left or right</b> on the panel (or drag with the mouse) to switch between CC Meter and the focus timer. Tap the big button to start or pause. Sounds play on the PC through the CC Meter app; this page plays the same sounds.</p>
+
+  <div class="lcd" id="lcd">
+    <div class="pages" id="pages">
+      <section class="page"><img src="lcd-preview.png" alt="CC Meter usage screen"></section>
+      <section class="page" id="focusPage">
+        <div class="head">
+          <div class="mode" id="mode">FOCUS<i id="modeSub">1 of 4</i></div>
+          <div class="cycle" id="cycle"><span></span><span></span><span></span><span></span></div>
+        </div>
+        <div class="ring paused" id="ring">
+          <svg viewBox="0 0 300 300" aria-hidden="true">
+            <circle class="track" cx="150" cy="150" r="136" fill="none" stroke-width="16"/>
+            <circle class="arc" id="arc" cx="150" cy="150" r="136" fill="none" stroke-width="16"/>
+          </svg>
+          <div class="time"><span id="clock">25:00</span><small id="state">TAP TO START</small></div>
+        </div>
+        <div class="controls">
+          <button class="btn" id="reset" aria-label="Reset"><svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+          <button class="btn main" id="main" aria-label="Start"><svg viewBox="0 0 24 24" id="mainIcon"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="btn" id="skip" aria-label="Skip"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zm9-12v12h2V6h-2z"/></svg></button>
+        </div>
+        <div class="today"><span>Today <b id="todayTotal">2h 35m</b> active</span><span><b id="todayCount">6</b> focus blocks</span></div>
+        <div class="flash" id="flash"></div>
+      </section>
+    </div>
+    <div class="dots"><span id="dot0"></span><span id="dot1" class="on"></span></div>
+  </div>
+
+  <div class="speed">Preview speed
+    <button id="speed1">1x</button><button id="speed30">30x</button>
+  </div>
+
+  <script>
+    const FOCUS = 25 * 60, SHORT = 5 * 60, LONG = 15 * 60;
+    const R = 136, C = 2 * Math.PI * R;
+    const $ = (id) => document.getElementById(id);
+    const arc = $('arc'); arc.style.strokeDasharray = C;
+
+    let page = 1, phase = 'focus', block = 0, total = FOCUS, left = FOCUS, running = false;
+    let todaySec = 2 * 3600 + 35 * 60, todayBlocks = 6, speed = 1, last = 0;
+
+    // Sound: the firmware sends EVENT lines over USB; the CC Meter app plays these.
+    let ac;
+    function tone(freq, dur, type = 'sine', gain = 0.15, when = 0) {
+      ac = ac || new AudioContext();
+      const t = ac.currentTime + when, o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+    }
+    const sounds = {
+      tap: () => tone(1800, 0.03, 'square', 0.05),
+      start: () => { tone(523, 0.12); tone(784, 0.18, 'sine', 0.15, 0.1); },
+      pause: () => { tone(784, 0.1); tone(523, 0.16, 'sine', 0.12, 0.08); },
+      tick: (n) => tone(n <= 3 ? 1320 : 990, 0.06, 'triangle', n <= 3 ? 0.2 : 0.1),
+      done: () => [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.5, 'sine', 0.16, i * 0.14)),
+    };
+
+    function fmt(s) { s = Math.max(0, Math.ceil(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+    function fmtTotal(s) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; }
+
+    function render() {
+      const ring = $('ring');
+      $('clock').textContent = fmt(left);
+      // Negative offset: the elapsed gap grows clockwise from 12 o'clock, like a clock hand.
+      arc.style.strokeDashoffset = -C * (1 - left / total);
+      ring.classList.toggle('break', phase !== 'focus');
+      ring.classList.toggle('paused', !running);
+      ring.classList.toggle('final', running && left <= 10);
+      $('state').textContent = running ? (phase === 'focus' ? 'FOCUSING' : 'BREAK') : (left === total ? 'TAP TO START' : 'PAUSED');
+      $('mode').firstChild.textContent = phase === 'focus' ? 'FOCUS' : phase === 'short' ? 'SHORT BREAK' : 'LONG BREAK';
+      $('modeSub').textContent = phase === 'focus' ? `${block % 4 + 1} of 4` : '';
+      [...$('cycle').children].forEach((d, i) => { d.className = i < block % 4 ? 'done' : (i === block % 4 && phase === 'focus' ? 'now' : ''); });
+      $('mainIcon').innerHTML = running ? '<path d="M7 5h4v14H7zm6 0h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+      $('todayTotal').textContent = fmtTotal(todaySec);
+      $('todayCount').textContent = todayBlocks;
+    }
+
+    function flash() { const f = $('flash'); f.className = 'flash' + (phase !== 'focus' ? ' break' : ''); void f.offsetWidth; f.classList.add('go'); }
+    function setPhase(p) { phase = p; total = left = p === 'focus' ? FOCUS : p === 'short' ? SHORT : LONG; }
+    function finish() {
+      sounds.done(); flash();
+      if (phase === 'focus') { block++; todayBlocks++; setPhase(block % 4 === 0 ? 'long' : 'short'); }
+      else setPhase('focus');
+      running = false; render();
+    }
+    function toggle() { running = !running; (running ? sounds.start : sounds.pause)(); flash(); render(); }
+
+    let lastWhole = null;
+    function frame(ts) {
+      if (running && last) {
+        const dt = (ts - last) / 1000 * speed;
+        left -= dt; if (phase === 'focus') todaySec += dt;
+        const whole = Math.ceil(left);
+        if (whole !== lastWhole && whole <= 10 && whole > 0) sounds.tick(whole);
+        lastWhole = whole;
+        if (left <= 0) finish(); else render();
+      }
+      last = ts; requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    function press(id, fn) {
+      const b = $(id);
+      b.addEventListener('pointerdown', (e) => { e.stopPropagation(); b.classList.add('pressed'); sounds.tap(); });
+      b.addEventListener('pointerup', (e) => { e.stopPropagation(); b.classList.remove('pressed'); fn(); });
+      b.addEventListener('pointerleave', () => b.classList.remove('pressed'));
+    }
+    press('main', toggle);
+    press('reset', () => { running = false; left = total; render(); });
+    press('skip', () => { running = false; left = 0; finish(); });
+    $('ring').addEventListener('click', toggle);
+
+    // Swipe: horizontal drag over 60 px flips the page, like the firmware.
+    const lcd = $('lcd'), pages = $('pages');
+    let sx = null, sy = null;
+    function show(p) {
+      page = p; pages.style.transform = `translateX(${p ? -50 : 0}%)`;
+      $('dot0').classList.toggle('on', p === 0); $('dot1').classList.toggle('on', p === 1);
+    }
+    lcd.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; });
+    lcd.addEventListener('pointerup', (e) => {
+      if (sx === null) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy; sx = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { show(dx < 0 ? 1 : 0); sounds.tap(); }
+    });
+    $('speed1').onclick = () => { speed = 1; };
+    $('speed30').onclick = () => { speed = 30; };
+    show(1); render();
+  </script>
+</body>
+</html>

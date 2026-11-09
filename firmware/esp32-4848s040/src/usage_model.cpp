@@ -171,6 +171,15 @@ bool parseUsageObject(JsonObjectConst root, UsageSnapshot& snapshot, char* error
     snapshot.hasGeneratedAt = true;
   }
 
+  const JsonVariantConst utcOffset = root["utc_offset_min"];
+  if (utcOffset.is<int>()) {
+    const int minutes = utcOffset.as<int>();
+    if (minutes >= -840 && minutes <= 840) {
+      snapshot.utcOffsetMinutes = static_cast<int16_t>(minutes);
+      snapshot.hasUtcOffset = true;
+    }
+  }
+
   const JsonObjectConst manualRefresh = root["manual_refresh"].as<JsonObjectConst>();
   if (!manualRefresh.isNull()) {
     snapshot.refreshOutcome = readRefreshOutcome(manualRefresh["status"]);

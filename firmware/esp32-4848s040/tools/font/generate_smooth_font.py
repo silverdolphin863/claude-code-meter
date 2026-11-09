@@ -3,10 +3,18 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 
-FONT_SIZES = (11, 13, 15, 18)
 FONT_WEIGHT = 600
 FIRST_CHARACTER = 32
 LAST_CHARACTER = 126
+# (size, weight, first, last, name suffix). The focus timer digits only need
+# 0-9 and ':', which keeps the 70 px table small.
+FONT_SPECS = (
+    (11, FONT_WEIGHT, FIRST_CHARACTER, LAST_CHARACTER, "11"),
+    (13, FONT_WEIGHT, FIRST_CHARACTER, LAST_CHARACTER, "13"),
+    (15, FONT_WEIGHT, FIRST_CHARACTER, LAST_CHARACTER, "15"),
+    (18, FONT_WEIGHT, FIRST_CHARACTER, LAST_CHARACTER, "18"),
+    (70, 700, ord("0"), ord(":"), "Digits70"),
+)
 
 script_directory = Path(__file__).resolve().parent
 firmware_directory = script_directory.parents[1]
@@ -24,14 +32,14 @@ def packed_alpha(bitmap):
     return output
 
 
-def render_font(size):
+def render_font(size, weight, first, last, name):
     font = ImageFont.truetype(str(font_path), size)
-    font.set_variation_by_axes([FONT_WEIGHT])
+    font.set_variation_by_axes([weight])
     ascent, descent = font.getmetrics()
     glyphs = []
     bitmap = bytearray()
 
-    for codepoint in range(FIRST_CHARACTER, LAST_CHARACTER + 1):
+    for codepoint in range(first, last + 1):
         character = chr(codepoint)
         left, top, right, bottom = font.getbbox(character, anchor="ls")
         width = max(0, right - left)
@@ -45,6 +53,9 @@ def render_font(size):
         glyphs.append((offset, width, height, left, top, round(font.getlength(character))))
 
     return {
+        "name": name,
+        "first": first,
+        "last": last,
         "size": size,
         "ascent": ascent,
         "descent": descent,
@@ -75,7 +86,7 @@ def generate_header(fonts):
     ]
 
     for font in fonts:
-        size = font["size"]
+        size = font["name"]
         output.extend([
             f"const uint8_t kSmoothFont{size}Bitmap[] PROGMEM = {{",
             bytes_literal(font["bitmap"]),
@@ -89,7 +100,7 @@ def generate_header(fonts):
             "};",
             "",
             f"const SmoothFont kSmoothFont{size} = {{",
-            f"    {FIRST_CHARACTER}, {LAST_CHARACTER}, {font['ascent']}, {font['descent']}, {font['line_height']},",
+            f"    {font['first']}, {font['last']}, {font['ascent']}, {font['descent']}, {font['line_height']},",
             f"    kSmoothFont{size}Glyphs, kSmoothFont{size}Bitmap,",
             "};",
             "",
@@ -102,7 +113,7 @@ def generate_header(fonts):
 def main():
     if not font_path.exists():
         raise SystemExit(f"Missing font source: {font_path}")
-    fonts = [render_font(size) for size in FONT_SIZES]
+    fonts = [render_font(*spec) for spec in FONT_SPECS]
     output_path.write_text(generate_header(fonts), encoding="utf-8", newline="\n")
     total_bytes = sum(len(font["bitmap"]) for font in fonts)
     print(f"Wrote {output_path} with {total_bytes} packed alpha bytes")

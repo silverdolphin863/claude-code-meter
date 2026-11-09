@@ -1,5 +1,7 @@
 #include "config_store.h"
 #include "display.h"
+#include "focus_model_core.h"
+#include "focus_ui.h"
 #include "network.h"
 #include "portal.h"
 #include "serial_protocol.h"
@@ -7,7 +9,10 @@
 #include "usage_model_core.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <cstring>
 #include <time.h>
 
@@ -22,6 +27,12 @@ constexpr uint32_t kRenderIntervalMs = 60000;
 constexpr uint64_t kStaleThresholdMs = 15ULL * 60ULL * 1000ULL;
 constexpr size_t kSerialLineCapacity = 49152;
 constexpr size_t kSerialRxBufferBytes = 8192;
+constexpr int kSwipeMinDx = 60;
+constexpr uint32_t kFocusSaveIntervalMs = 60000;
+constexpr uint32_t kFocusDayCheckMs = 60000;
+constexpr uint32_t kFocusPulseMs = 250;
+constexpr uint32_t kFocusFlashFrameMs = 45;
+constexpr uint8_t kFocusFlashTints[] = {80, 52, 28, 10, 0};
 
 DeviceConfig deviceConfig;
 UsageClient usageClient(deviceConfig);
@@ -36,6 +47,19 @@ bool wifiAttempting = false;
 bool refreshing = false;
 bool serialRefreshPending = false;
 bool touchDown = false;
+int16_t touchStartX = 0;
+int16_t touchStartY = 0;
+int16_t touchLastX = 0;
+int16_t touchLastY = 0;
+uint8_t activePage = 0;  // 0 = CC Meter, 1 = focus timer
+FocusTimer focusTimer;
+FocusButton focusPressed = FocusButton::None;
+uint8_t focusFlashStep = sizeof(kFocusFlashTints);
+uint32_t nextFocusFlashAt = 0;
+uint32_t nextFocusSaveAt = 0;
+uint32_t nextFocusDayCheckAt = 0;
+uint32_t nextFocusPulseAt = 0;
+bool focusPulse = false;
 bool serialUsageActive = false;
 uint32_t wifiAttemptStartedAt = 0;
 uint32_t nextPollAt = 0;
@@ -150,6 +174,13 @@ UiState currentUiState() {
 }
 
 void drawNow() {
+  if (activePage != 0) {
+    // The focus page owns the screen; redraw the meter when it comes back.
+    fullRenderPending = true;
+    snapshotRenderPending = false;
+    nextRenderAt = millis() + kRenderIntervalMs;
+    return;
+  }
   const String apSsid = configPortal.active() ? configPortal.ssid() : String();
   const String apIp = configPortal.active() ? configPortal.ipAddress() : String();
   uiDraw(hasSnapshot ? &usageSnapshot : nullptr, currentUiState(), refreshing, currentEpochMs(), dataAgeMs(),
@@ -176,6 +207,10 @@ void requestDynamicRender() {
 }
 
 void refreshDynamicNow() {
+  if (activePage != 0) {
+    nextRenderAt = millis() + kRenderIntervalMs;
+    return;
+  }
   if (fullRenderPending) {
     drawNow();
     return;
@@ -257,6 +292,7 @@ void applyUsageSnapshot(const UsageSnapshot& incomingSnapshot, bool fromSerial) 
     clockBaseMillis = successAt;
     clockValid = true;
   }
+  nextFocusDayCheckAt = 0;  // the snapshot may carry a new clock or UTC offset
   if (layoutChanged || currentUiState() != previousUiState) requestFullRender();
   else if (visibleDataChanged) requestSnapshotRender();
   else if (completedSerialRefresh || refreshOutcomeChanged) requestDynamicRender();
@@ -405,16 +441,7 @@ void serviceSerial() {
   }
 }
 
-void serviceTouch() {
-  int16_t x = 0;
-  int16_t y = 0;
-  const bool down = displayReadTouch(x, y);
-  if (!down) {
-    touchDown = false;
-    return;
-  }
-  if (touchDown) return;
-  touchDown = true;
+void handleMeterTap(int16_t x, int16_t y) {
   if (y <= kUiHeaderTouchBottom && x >= kUiRefreshTouchLeft && x < kUiRefreshTouchRight) {
     const uint32_t now = millis();
     if (lastManualRefreshAt != 0 && elapsed(now, lastManualRefreshAt) < kManualRefreshCooldownMs) return;
@@ -445,6 +472,182 @@ void serviceTouch() {
   }
 }
 
+// One JSON line per focus event. The Windows host turns these into sounds.
+void emitFocusEvent(const char* event, uint8_t countdownSecond = 0) {
+  char line[128] = {};
+  if (countdownSecond) {
+    snprintf(line, sizeof(line),
+             "{\"type\":\"focus\",\"event\":\"%s\",\"phase\":\"%s\",\"remaining_s\":%lu,\"second\":%u}", event,
+             focusPhaseName(focusTimer.phase()), static_cast<unsigned long>(focusTimer.displaySeconds()),
+             static_cast<unsigned>(countdownSecond));
+  } else {
+    snprintf(line, sizeof(line), "{\"type\":\"focus\",\"event\":\"%s\",\"phase\":\"%s\",\"remaining_s\":%lu}", event,
+             focusPhaseName(focusTimer.phase()), static_cast<unsigned long>(focusTimer.displaySeconds()));
+  }
+  Serial.println(line);
+}
+
+void saveFocusState() {
+  Preferences preferences;
+  if (!preferences.begin("focus", false)) return;
+  const FocusSaved saved = focusTimer.save();
+  preferences.putBytes("state", &saved, sizeof(saved));
+  preferences.end();
+  nextFocusSaveAt = millis() + kFocusSaveIntervalMs;
+}
+
+void loadFocusState() {
+  Preferences preferences;
+  if (!preferences.begin("focus", true)) return;
+  FocusSaved saved;
+  if (preferences.getBytesLength("state") == sizeof(saved) &&
+      preferences.getBytes("state", &saved, sizeof(saved)) == sizeof(saved)) {
+    focusTimer.restore(saved);
+  }
+  preferences.end();
+}
+
+void applyFocusDay() {
+  if (!hasSnapshot) return;
+  focusTimer.setDay(focusDayKey(currentEpochMs(), usageSnapshot.hasUtcOffset, usageSnapshot.utcOffsetMinutes));
+}
+
+void drawFocusPage() {
+  focusUiDraw(focusTimer, focusPressed, 0);
+}
+
+void startFocusFlash() {
+  if (activePage != 1) return;
+  focusFlashStep = 0;
+  nextFocusFlashAt = millis();
+}
+
+void serviceFocusFlash() {
+  if (activePage != 1 || focusFlashStep >= sizeof(kFocusFlashTints) || !due(nextFocusFlashAt, millis())) return;
+  focusUiDraw(focusTimer, focusPressed, kFocusFlashTints[focusFlashStep]);
+  ++focusFlashStep;
+  nextFocusFlashAt = millis() + kFocusFlashFrameMs;
+}
+
+bool focusFlashing() {
+  return focusFlashStep < sizeof(kFocusFlashTints);
+}
+
+void handleFocusTap(int16_t x, int16_t y, FocusButton released) {
+  const uint32_t now = millis();
+  FocusButton button = released;
+  if (button == FocusButton::None && focusUiHitRing(x, y)) button = FocusButton::Main;
+  if (button == FocusButton::None) return;
+  if (button == FocusButton::Main) {
+    const bool wasRunning = focusTimer.running();
+    focusTimer.toggle(now);
+    emitFocusEvent(wasRunning ? "pause" : "start");
+  } else if (button == FocusButton::Reset) {
+    focusTimer.reset(now);
+    emitFocusEvent("reset");
+  } else {
+    focusTimer.skip(now);
+    emitFocusEvent("skip");
+  }
+  focusPulse = false;
+  saveFocusState();
+  startFocusFlash();
+}
+
+void setActivePage(uint8_t page) {
+  if (page == activePage) return;
+  activePage = page;
+  focusPressed = FocusButton::None;
+  focusFlashStep = sizeof(kFocusFlashTints);
+  emitFocusEvent("tap");
+  if (activePage == 1) {
+    drawFocusPage();
+  } else {
+    fullRenderPending = true;
+    drawNow();
+  }
+}
+
+void serviceTouch() {
+  int16_t x = 0;
+  int16_t y = 0;
+  const bool down = displayReadTouch(x, y);
+  if (down) {
+    touchLastX = x;
+    touchLastY = y;
+    if (touchDown) return;
+    touchDown = true;
+    touchStartX = x;
+    touchStartY = y;
+    if (activePage == 1) {
+      focusPressed = focusUiHitButton(x, y);
+      if (focusPressed != FocusButton::None) focusUiRefreshButtons(focusTimer, focusPressed);
+    }
+    return;
+  }
+  if (!touchDown) return;
+  touchDown = false;
+
+  const int dx = touchLastX - touchStartX;
+  const int dy = touchLastY - touchStartY;
+  const FocusButton pressed = focusPressed;
+  focusPressed = FocusButton::None;
+  if (activePage == 1 && pressed != FocusButton::None) focusUiRefreshButtons(focusTimer, FocusButton::None);
+
+  // Horizontal swipe: left opens the focus timer, right goes back to the meter.
+  if (abs(dx) > kSwipeMinDx && abs(dx) * 2 > abs(dy) * 3) {
+    setActivePage(dx < 0 ? 1 : 0);
+    return;
+  }
+  if (abs(dx) > 24 || abs(dy) > 24) return;  // a drag, not a tap
+
+  if (activePage == 0) {
+    handleMeterTap(touchStartX, touchStartY);
+    return;
+  }
+  // A press counts only when it is released on the same button.
+  const FocusButton released = pressed != FocusButton::None && focusUiHitButton(touchLastX, touchLastY) == pressed
+                                   ? pressed
+                                   : FocusButton::None;
+  if (pressed != FocusButton::None && released == FocusButton::None) return;
+  handleFocusTap(touchStartX, touchStartY, released);
+}
+
+void serviceFocus() {
+  const uint32_t now = millis();
+  const FocusTick tick = focusTimer.tick(now);
+  if (tick.finished) {
+    emitFocusEvent("done");
+    saveFocusState();
+    focusPulse = false;
+    startFocusFlash();
+  } else if (tick.countdownSecond) {
+    emitFocusEvent("tick", tick.countdownSecond);
+  }
+  if (focusTimer.running() && due(nextFocusSaveAt, now)) saveFocusState();
+  if (due(nextFocusDayCheckAt, now)) {
+    applyFocusDay();
+    nextFocusDayCheckAt = now + kFocusDayCheckMs;
+  }
+
+  if (activePage != 1) return;
+  if (focusFlashing()) {
+    serviceFocusFlash();
+    return;
+  }
+  bool redraw = tick.secondChanged;
+  const bool finalCountdown = focusTimer.running() && focusTimer.remainingMs() <= 10000;
+  if (finalCountdown && due(nextFocusPulseAt, now)) {
+    focusPulse = !focusPulse;
+    nextFocusPulseAt = now + kFocusPulseMs;
+    redraw = true;
+  } else if (!finalCountdown && focusPulse) {
+    focusPulse = false;
+    redraw = true;
+  }
+  if (redraw) focusUiRefresh(focusTimer, focusPulse);
+}
+
 void serviceSerialRefreshTimeout() {
   if (!serialRefreshPending) return;
   if (elapsed(millis(), serialRefreshRequestedAt) < kSerialRefreshTimeoutMs) return;
@@ -454,7 +657,7 @@ void serviceSerialRefreshTimeout() {
 }
 
 void serviceRefreshAnimation() {
-  if (!refreshing || fullRenderPending || !due(nextRefreshAnimationAt, millis())) return;
+  if (activePage != 0 || !refreshing || fullRenderPending || !due(nextRefreshAnimationAt, millis())) return;
   uiRefreshHeader(currentUiState(), true, dataAgeMs(),
                   hasSnapshot ? usageSnapshot.refreshOutcome : RefreshOutcome::None);
   nextRefreshAnimationAt = millis() + kUiRefreshAnimationFrameMs;
@@ -469,6 +672,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println(serialHelloLine());
   displayBegin();
+  loadFocusState();
   loadDeviceConfig(deviceConfig);
   if (deviceConfig.configured()) beginWifi();
   requestFullRender();
@@ -483,6 +687,7 @@ void loop() {
   serviceTouch();
   serviceSerialRefreshTimeout();
   serviceRefreshAnimation();
+  serviceFocus();
   if (due(nextRenderAt, millis())) refreshDynamicNow();
   delay(5);
 }

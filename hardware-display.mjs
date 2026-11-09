@@ -50,11 +50,26 @@ export function parseHardwareMessage(line) {
   }
 }
 
+const FOCUS_EVENTS = new Set(['start', 'pause', 'reset', 'skip', 'tap', 'tick', 'done']);
+const FOCUS_PHASES = new Set(['focus', 'short', 'long']);
+
+// Panel focus timer events become sounds on the PC; the board has no speaker.
+export function focusEventFromMessage(message) {
+  if (!message || message.type !== 'focus' || !FOCUS_EVENTS.has(message.event)) return null;
+  const phase = FOCUS_PHASES.has(message.phase) ? message.phase : 'focus';
+  const second = Number.isInteger(message.second) && message.second >= 1 && message.second <= 10
+    ? message.second
+    : null;
+  if (message.event === 'tick' && second === null) return null;
+  return { event: message.event, phase, second };
+}
+
 export class HardwareDisplayController {
-  constructor({ bridgePath, loadUsage, onChange = () => {} }) {
+  constructor({ bridgePath, loadUsage, onChange = () => {}, onFocusEvent = () => {} }) {
     this.bridgePath = bridgePath;
     this.loadUsage = loadUsage;
     this.onChange = onChange;
+    this.onFocusEvent = onFocusEvent;
     this.config = { enabled: false, transport: 'usb', serialPort: 'auto' };
     this.child = null;
     this.pollTimer = null;
@@ -220,6 +235,11 @@ export class HardwareDisplayController {
       } else if (message.type === 'refresh') {
         this.emit({ deviceSeen: true, lastSeen: new Date().toISOString(), error: null });
         this.sendUsage(true);
+      } else if (message.type === 'focus') {
+        const event = focusEventFromMessage(message);
+        if (event) {
+          try { this.onFocusEvent(event); } catch { /* a sound must never break the bridge */ }
+        }
       }
     }
     if (this.stdout.length > 8192) this.stdout = '';

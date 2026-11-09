@@ -2,6 +2,9 @@
 
 #include <unity.h>
 
+#include "focus_geometry.h"
+#include "touch_debounce.h"
+#include "focus_model_core.h"
 #include "serial_protocol.h"
 #include "usage_model.h"
 #include "usage_model_core.h"
@@ -71,7 +74,7 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.0.9\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.1\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
 }
@@ -129,6 +132,141 @@ void test_age_and_pace_helpers() {
   TEST_ASSERT_EQUAL(static_cast<int>(UsageTone::Red), static_cast<int>(usageTone(97.0f)));
 }
 
+void test_focus_timer_counts_down_and_credits_active_time() {
+  FocusTimer timer;
+  TEST_ASSERT_EQUAL_UINT32(1500, timer.displaySeconds());
+  timer.start(1000);
+  FocusTick tick = timer.tick(1000 + 61000);
+  TEST_ASSERT_TRUE(tick.secondChanged);
+  TEST_ASSERT_FALSE(tick.finished);
+  TEST_ASSERT_EQUAL_UINT32(1439, timer.displaySeconds());
+  TEST_ASSERT_EQUAL_UINT32(61000, timer.todayFocusMs());
+  timer.pause(1000 + 62000);
+  timer.tick(1000 + 500000);  // paused: no time passes
+  TEST_ASSERT_EQUAL_UINT32(62000, timer.todayFocusMs());
+  TEST_ASSERT_EQUAL_UINT32(1438, timer.displaySeconds());
+}
+
+void test_focus_timer_final_countdown_and_finish() {
+  FocusTimer timer;
+  timer.start(0);
+  timer.tick(kFocusMs - 10500);
+  FocusTick tick = timer.tick(kFocusMs - 9900);  // 10 -> displayed 10 s
+  TEST_ASSERT_EQUAL_UINT8(10, tick.countdownSecond);
+  tick = timer.tick(kFocusMs - 9800);  // same second, no new tick
+  TEST_ASSERT_EQUAL_UINT8(0, tick.countdownSecond);
+  tick = timer.tick(kFocusMs + 5000);
+  TEST_ASSERT_TRUE(tick.finished);
+  TEST_ASSERT_EQUAL_UINT16(1, timer.todayBlocks());
+  TEST_ASSERT_EQUAL_UINT32(kFocusMs, timer.todayFocusMs());
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(timer.phase()));
+  TEST_ASSERT_FALSE(timer.running());
+  TEST_ASSERT_EQUAL_UINT32(300, timer.displaySeconds());
+}
+
+void test_focus_cycle_gives_long_break_after_four_blocks() {
+  FocusTimer timer;
+  uint32_t now = 0;
+  for (int block = 0; block < 4; ++block) {
+    TEST_ASSERT_EQUAL_UINT8(block + 1, timer.blockNumber());
+    timer.start(now); now += kFocusMs; timer.tick(now);
+    if (block < 3) {
+      TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(timer.phase()));
+      timer.skip(now);
+    }
+  }
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::LongBreak), static_cast<int>(timer.phase()));
+  TEST_ASSERT_EQUAL_UINT8(4, timer.cycleDone());
+  timer.skip(now);
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::Focus), static_cast<int>(timer.phase()));
+  TEST_ASSERT_EQUAL_UINT8(1, timer.blockNumber());
+  TEST_ASSERT_EQUAL_UINT16(4, timer.todayBlocks());
+}
+
+void test_focus_skip_does_not_credit_a_block() {
+  FocusTimer timer;
+  timer.start(0);
+  timer.tick(60000);
+  timer.skip(60000);
+  TEST_ASSERT_EQUAL_UINT16(0, timer.todayBlocks());
+  TEST_ASSERT_EQUAL_UINT32(60000, timer.todayFocusMs());
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(timer.phase()));
+}
+
+void test_focus_day_change_clears_today_only_from_a_known_day() {
+  FocusTimer timer;
+  timer.start(0);
+  timer.tick(120000);
+  timer.setDay(20400);  // first known day: keep what accrued
+  TEST_ASSERT_EQUAL_UINT32(120000, timer.todayFocusMs());
+  timer.setDay(20400);
+  TEST_ASSERT_EQUAL_UINT32(120000, timer.todayFocusMs());
+  timer.setDay(20401);
+  TEST_ASSERT_EQUAL_UINT32(0, timer.todayFocusMs());
+  // 2026-11-09 23:30 UTC is already 2026-11-10 in UTC+1.
+  const uint64_t epoch = 1794267000000ULL;
+  TEST_ASSERT_EQUAL_INT32(focusDayKey(epoch, true, 0) + 1, focusDayKey(epoch, true, 60));
+  TEST_ASSERT_EQUAL_INT32(kUnknownDay, focusDayKey(epoch, false, 60));
+}
+
+void test_focus_restore_comes_back_paused() {
+  FocusTimer timer;
+  timer.start(0);
+  timer.tick(300000);
+  FocusSaved saved = timer.save();
+  FocusTimer restored;
+  restored.restore(saved);
+  TEST_ASSERT_FALSE(restored.running());
+  TEST_ASSERT_EQUAL_UINT32(1200, restored.displaySeconds());
+  TEST_ASSERT_EQUAL_UINT32(300000, restored.todayFocusMs());
+  saved.phase = 9;
+  saved.remainingMs = 0;
+  restored.restore(saved);
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::Focus), static_cast<int>(restored.phase()));
+  TEST_ASSERT_EQUAL_UINT32(kFocusMs, restored.remainingMs());
+}
+
+void test_focus_ring_empties_clockwise_from_twelve() {
+  // A quarter elapsed: the gap runs from 12 to 3 o'clock.
+  const float quarter = 0.25f;
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, focusClockwiseFraction(0, -10));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.25f, focusClockwiseFraction(10, 0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.75f, focusClockwiseFraction(-10, 0));
+  TEST_ASSERT_FALSE(focusArcCovers(focusClockwiseFraction(7, -7), quarter));   // 1:30, emptied
+  TEST_ASSERT_TRUE(focusArcCovers(focusClockwiseFraction(0, 10), quarter));    // 6 o'clock, remaining
+  TEST_ASSERT_TRUE(focusArcCovers(focusClockwiseFraction(-7, -7), quarter));   // 10:30, remaining
+}
+
+void test_focus_digits_are_centred_on_the_ring() {
+  const int capCentre = focusDigitCapTop() + kFocusDigitCapHeight / 2;
+  TEST_ASSERT_INT_WITHIN(1, kFocusRingCenterY, capCentre);
+}
+
+void test_usage_payload_reads_optional_utc_offset() {
+  const char payload[] = R"json({"server_time_ms":1786104000000,"utc_offset_min":60,"sections":[{"id":"codex","name":"Codex","limits":[]}]})json";
+  UsageSnapshot snapshot;
+  char error[64] = {};
+  TEST_ASSERT_TRUE(parseUsageJson(payload, strlen(payload), snapshot, error, sizeof(error)));
+  TEST_ASSERT_TRUE(snapshot.hasUtcOffset);
+  TEST_ASSERT_EQUAL_INT16(60, snapshot.utcOffsetMinutes);
+  const char bad[] = R"json({"utc_offset_min":9999,"sections":[{"id":"codex","name":"Codex","limits":[]}]})json";
+  TEST_ASSERT_TRUE(parseUsageJson(bad, strlen(bad), snapshot, error, sizeof(error)));
+  TEST_ASSERT_FALSE(snapshot.hasUtcOffset);
+}
+
+void test_touch_gap_does_not_release(void) {
+  TouchDebounce debounce;
+  int16_t x = 0, y = 0;
+  TEST_ASSERT_TRUE(debounce.update(true, 400, 200, 1000, x, y));
+  // GT911 not ready yet: a 5 ms poll reads no touch while the finger moves on.
+  TEST_ASSERT_TRUE(debounce.update(false, 0, 0, 1005, x, y));
+  TEST_ASSERT_EQUAL_INT16(400, x);
+  TEST_ASSERT_TRUE(debounce.update(true, 300, 205, 1030, x, y));
+  TEST_ASSERT_TRUE(debounce.update(false, 0, 0, 1030 + kTouchReleaseMs - 1, x, y));
+  TEST_ASSERT_FALSE(debounce.update(false, 0, 0, 1030 + kTouchReleaseMs, x, y));
+  TEST_ASSERT_EQUAL_INT16(300, x);  // the swipe ends where the finger was last seen
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_usage_payload_maps_optional_windows_and_sections);
@@ -139,5 +277,15 @@ int main() {
   RUN_TEST(test_parser_rejects_missing_sections);
   RUN_TEST(test_countdown_and_reset_format_match_desktop_shape);
   RUN_TEST(test_age_and_pace_helpers);
+  RUN_TEST(test_focus_timer_counts_down_and_credits_active_time);
+  RUN_TEST(test_focus_timer_final_countdown_and_finish);
+  RUN_TEST(test_focus_cycle_gives_long_break_after_four_blocks);
+  RUN_TEST(test_focus_skip_does_not_credit_a_block);
+  RUN_TEST(test_focus_day_change_clears_today_only_from_a_known_day);
+  RUN_TEST(test_focus_restore_comes_back_paused);
+  RUN_TEST(test_focus_ring_empties_clockwise_from_twelve);
+  RUN_TEST(test_focus_digits_are_centred_on_the_ring);
+  RUN_TEST(test_usage_payload_reads_optional_utc_offset);
+  RUN_TEST(test_touch_gap_does_not_release);
   return UNITY_END();
 }

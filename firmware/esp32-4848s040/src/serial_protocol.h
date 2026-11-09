@@ -3,7 +3,7 @@
 namespace ccmeter {
 
 inline const char* serialHelloLine() {
-  return "{\"type\":\"hello\",\"firmware\":\"1.0.9\",\"model\":\"ESP32-4848S040\"}";
+  return "{\"type\":\"hello\",\"firmware\":\"1.1.1\",\"model\":\"ESP32-4848S040\"}";
 }
 
 inline const char* serialAckLine() {

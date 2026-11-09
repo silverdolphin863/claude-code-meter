@@ -27,7 +27,38 @@ const hardwareDisplay = new HardwareDisplayController({
   bridgePath: HARDWARE_BRIDGE,
   loadUsage: getPanelUsage,
   onChange: () => publishHardwareState(),
+  onFocusEvent: (event) => playFocusSound(event),
 });
+
+// The panel's focus timer has no speaker, so its events play here, in a
+// hidden window that may start audio without a user gesture.
+let focusSoundWin = null;
+function playFocusSound(event) {
+  if (!app.isReady()) return;
+  if (!focusSoundWin || focusSoundWin.isDestroyed()) {
+    focusSoundWin = new BrowserWindow({
+      show: false,
+      skipTaskbar: true,
+      webPreferences: {
+        autoplayPolicy: 'no-user-gesture-required',
+        backgroundThrottling: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    focusSoundWin.on('closed', () => { focusSoundWin = null; });
+    focusSoundWin.loadFile(path.join(DIR, 'public', 'focus-sound.html')).catch(() => {});
+  }
+  const win = focusSoundWin;
+  const run = () => {
+    if (win.isDestroyed()) return;
+    // event comes from focusEventFromMessage: fixed strings and a small integer.
+    win.webContents.executeJavaScript(`playFocusSound(${JSON.stringify(event)})`).catch(() => {});
+  };
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', run);
+  else run();
+}
 
 // Pin the app name BEFORE resolving userData. Otherwise the dev run uses the
 // package `name` and the packaged build uses `productName`, so they read two
