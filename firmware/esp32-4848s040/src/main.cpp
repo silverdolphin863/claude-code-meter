@@ -551,7 +551,8 @@ void handleFocusTap(int16_t x, int16_t y, FocusButton released) {
   }
   focusPulse = false;
   saveFocusState();
-  startFocusFlash();
+  // Taps get a clean redraw and a PC sound; only a finished block flashes.
+  drawFocusPage();
 }
 
 void setActivePage(uint8_t page) {

@@ -609,7 +609,7 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   // The RGB panel scans the same framebuffer that drawing commands modify.
   // Publish only after the complete frame is composed so the once-per-minute
   // countdown repaint cannot expose the cleared background between elements.
-  display->flush();
+  displayFlushRect(0, 0, 480, 480);
 }
 
 void uiRefreshDynamic(const UsageSnapshot* snapshot, UiState state, bool refreshing,

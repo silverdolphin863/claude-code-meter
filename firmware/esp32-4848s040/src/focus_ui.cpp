@@ -300,7 +300,7 @@ void focusUiDraw(const FocusTimer& timer, FocusButton pressed, uint8_t tint) {
   drawStateLabel(timer, background);
   drawButtons(timer, pressed, background);
   drawToday(timer, background);
-  display->flush();
+  displayFlushRect(0, 0, 480, 480);
 }
 
 void focusUiRefresh(const FocusTimer& timer, bool pulse) {

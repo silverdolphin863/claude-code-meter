@@ -5,6 +5,7 @@
 #include <Arduino_GFX_Library.h>
 #include <TAMC_GT911.h>
 #include <Wire.h>
+#include <string.h>
 
 namespace ccmeter {
 
@@ -49,6 +50,12 @@ const uint8_t boardColorOperations[] = {
     WRITE_COMMAND_8, 0x20,
     END_WRITE};
 
+// Off-screen frame in PSRAM. All drawing lands here first; displayFlushRect
+// copies only finished pixels into the scanned framebuffer, so the panel never
+// shows a cleared area between "erase" and "draw".
+Arduino_Canvas* backBuffer = nullptr;
+bool backBufferReady = false;
+
 // This is the vendor demo's exact GT911 construction and normal rotation.
 TAMC_GT911 touch = TAMC_GT911(kTouchSdaPin, kTouchSclPin, -1, -1, kScreenWidth, kScreenHeight);
 
@@ -63,11 +70,16 @@ void displayBegin() {
   initBus->batchOperation(const_cast<uint8_t*>(boardColorOperations), sizeof(boardColorOperations));
   gfx->fillScreen(BLACK);
   gfx->flush();
+  backBuffer = new Arduino_Canvas(kScreenWidth, kScreenHeight, gfx);
+  backBufferReady = backBuffer->begin(GFX_SKIP_OUTPUT_BEGIN);
+  if (backBufferReady) backBuffer->fillScreen(BLACK);
+  else Serial.println("{\"type\":\"error\",\"error\":\"back_buffer_alloc\"}");
   pinMode(kBacklightPin, OUTPUT);
   digitalWrite(kBacklightPin, HIGH);
 }
 
 Arduino_GFX* displayCanvas() {
+  if (backBufferReady) return backBuffer;
   return gfx;
 }
 
@@ -82,12 +94,17 @@ void displayFlushRect(int16_t x, int16_t y, int16_t width, int16_t height) {
 
   uint16_t* framebuffer = gfx->getFramebuffer();
   if (!framebuffer) return;
+  const uint16_t* source = backBufferReady ? backBuffer->getFramebuffer() : nullptr;
+  const size_t rowBytes = static_cast<size_t>(right - left) * sizeof(uint16_t);
 
   // The RGB DMA engine continuously scans the single PSRAM framebuffer. A
   // whole-frame cache writeback is therefore visible while it is in progress.
   // Write back only the rows that changed, aligned to ESP32-S3 cache lines.
   constexpr uintptr_t kCacheLineBytes = 32;
   for (int16_t row = top; row < bottom; ++row) {
+    if (source) {
+      memcpy(framebuffer + row * kScreenWidth + left, source + row * kScreenWidth + left, rowBytes);
+    }
     const uintptr_t firstByte = reinterpret_cast<uintptr_t>(framebuffer + row * kScreenWidth + left);
     const uintptr_t lastByte = reinterpret_cast<uintptr_t>(framebuffer + row * kScreenWidth + right);
     const uintptr_t alignedFirst = firstByte & ~(kCacheLineBytes - 1);
