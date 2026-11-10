@@ -30,7 +30,6 @@ constexpr size_t kSerialRxBufferBytes = 8192;
 constexpr int kSwipeMinDx = 60;
 constexpr uint32_t kFocusSaveIntervalMs = 60000;
 constexpr uint32_t kFocusDayCheckMs = 60000;
-constexpr uint32_t kFocusPulseMs = 250;
 constexpr uint32_t kFocusFlashFrameMs = 45;
 constexpr uint8_t kFocusFlashTints[] = {80, 52, 28, 10, 0};
 
@@ -58,7 +57,6 @@ uint8_t focusFlashStep = sizeof(kFocusFlashTints);
 uint32_t nextFocusFlashAt = 0;
 uint32_t nextFocusSaveAt = 0;
 uint32_t nextFocusDayCheckAt = 0;
-uint32_t nextFocusPulseAt = 0;
 bool focusPulse = false;
 bool serialUsageActive = false;
 uint32_t wifiAttemptStartedAt = 0;
@@ -500,6 +498,7 @@ void loadFocusState() {
   Preferences preferences;
   if (!preferences.begin("focus", true)) return;
   FocusSaved saved;
+  focusUiSetAccent(preferences.getUChar("accent", 0));
   if (preferences.getBytesLength("state") == sizeof(saved) &&
       preferences.getBytes("state", &saved, sizeof(saved)) == sizeof(saved)) {
     focusTimer.restore(saved);
@@ -535,6 +534,18 @@ bool focusFlashing() {
 
 void handleFocusTap(int16_t x, int16_t y, FocusButton released) {
   const uint32_t now = millis();
+  if (released == FocusButton::None && focusUiHitTitle(x, y)) {
+    // Tapping the FOCUS title cycles the ring and button colour.
+    const uint8_t accent = focusUiCycleAccent();
+    Preferences preferences;
+    if (preferences.begin("focus", false)) {
+      preferences.putUChar("accent", accent);
+      preferences.end();
+    }
+    emitFocusEvent("tap");
+    drawFocusPage();
+    return;
+  }
   FocusButton button = released;
   if (button == FocusButton::None && focusUiHitRing(x, y)) button = FocusButton::Main;
   if (button == FocusButton::None) return;
@@ -637,13 +648,11 @@ void serviceFocus() {
     return;
   }
   bool redraw = tick.secondChanged;
+  // The ring turns yellow once for the final ten seconds. It does not blink:
+  // every colour change is a full ring redraw, and those make the panel jump.
   const bool finalCountdown = focusTimer.running() && focusTimer.remainingMs() <= 10000;
-  if (finalCountdown && due(nextFocusPulseAt, now)) {
-    focusPulse = !focusPulse;
-    nextFocusPulseAt = now + kFocusPulseMs;
-    redraw = true;
-  } else if (!finalCountdown && focusPulse) {
-    focusPulse = false;
+  if (finalCountdown != focusPulse) {
+    focusPulse = finalCountdown;
     redraw = true;
   }
   if (redraw) focusUiRefresh(focusTimer, focusPulse);

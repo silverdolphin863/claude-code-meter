@@ -19,6 +19,11 @@ void focusUiDraw(const FocusTimer& timer, FocusButton pressed, uint8_t tint);
 void focusUiRefresh(const FocusTimer& timer, bool pulse);
 void focusUiRefreshButtons(const FocusTimer& timer, FocusButton pressed);
 
+// Ring and button colour: index into a fixed palette, saved by the caller.
+void focusUiSetAccent(uint8_t index);
+uint8_t focusUiCycleAccent();
+bool focusUiHitTitle(int16_t x, int16_t y);
+
 FocusButton focusUiHitButton(int16_t x, int16_t y);
 bool focusUiHitRing(int16_t x, int16_t y);
 

@@ -74,7 +74,7 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.2\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.3\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
 }
@@ -267,6 +267,27 @@ void test_touch_gap_does_not_release(void) {
   TEST_ASSERT_EQUAL_INT16(300, x);  // the swipe ends where the finger was last seen
 }
 
+void test_ring_patch_covers_the_moving_arc_end(void) {
+  // One second of a 25 minute block: the patch must hold both arc ends and
+  // stay a small fraction of the ring box, or the per-second redraw is big.
+  const float from = 0.300f;
+  const float to = from + 1.0f / 1500.0f;
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  TEST_ASSERT_TRUE(focusRingPatch(from, to, x0, y0, x1, y1));
+  const float twoPi = 2.0f * 3.14159265f;
+  const float ends[2] = {from, to};
+  for (float e : ends) {
+    const float px = kFocusRingCenterX + sinf(e * twoPi) * kFocusRingRadius;
+    const float py = kFocusRingCenterY - cosf(e * twoPi) * kFocusRingRadius;
+    TEST_ASSERT_TRUE(px - kFocusRingStroke / 2 >= x0 && px + kFocusRingStroke / 2 <= x1);
+    TEST_ASSERT_TRUE(py - kFocusRingStroke / 2 >= y0 && py + kFocusRingStroke / 2 <= y1);
+  }
+  TEST_ASSERT_TRUE((x1 - x0 + 1) * (y1 - y0 + 1) < 1200);
+  // A reset or a skip moves the arc backwards: full redraw, no patch.
+  TEST_ASSERT_FALSE(focusRingPatch(0.5f, 0.0f, x0, y0, x1, y1));
+  TEST_ASSERT_FALSE(focusRingPatch(0.1f, 0.2f, x0, y0, x1, y1));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_usage_payload_maps_optional_windows_and_sections);
@@ -287,5 +308,6 @@ int main() {
   RUN_TEST(test_focus_digits_are_centred_on_the_ring);
   RUN_TEST(test_usage_payload_reads_optional_utc_offset);
   RUN_TEST(test_touch_gap_does_not_release);
+  RUN_TEST(test_ring_patch_covers_the_moving_arc_end);
   return UNITY_END();
 }

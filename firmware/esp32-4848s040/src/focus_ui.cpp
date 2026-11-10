@@ -8,6 +8,7 @@
 #include <Arduino_GFX_Library.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 namespace ccmeter {
 namespace {
@@ -24,7 +25,17 @@ constexpr uint16_t kTrack = rgb565(38, 35, 50);
 constexpr uint16_t kText = rgb565(244, 242, 249);
 constexpr uint16_t kMuted = rgb565(139, 133, 160);
 constexpr uint16_t kDim = rgb565(98, 92, 120);
-constexpr uint16_t kFocusColor = rgb565(255, 122, 89);
+// Ring and button colour choices, cycled by tapping the header title.
+constexpr uint16_t kAccents[] = {
+    rgb565(255, 122, 89),   // coral (default)
+    rgb565(255, 176, 46),   // amber
+    rgb565(96, 165, 250),   // sky
+    rgb565(167, 139, 250),  // violet
+    rgb565(244, 114, 182),  // rose
+    rgb565(45, 212, 191),   // teal
+};
+constexpr uint8_t kAccentCount = sizeof(kAccents) / sizeof(kAccents[0]);
+uint8_t gAccent = 0;
 constexpr uint16_t kBreakColor = rgb565(57, 217, 138);
 constexpr uint16_t kWarnColor = rgb565(255, 202, 59);
 
@@ -55,9 +66,26 @@ uint8_t coverage(float value) {
   return static_cast<uint8_t>(value * 255.0f + 0.5f);
 }
 
+uint16_t accentColor() { return kAccents[gAccent]; }
+
 uint16_t phaseColor(const FocusTimer& timer) {
-  return timer.phase() == FocusPhase::Focus ? kFocusColor : kBreakColor;
+  return timer.phase() == FocusPhase::Focus ? accentColor() : kBreakColor;
 }
+
+// What the screen shows now, so a refresh redraws only what changed. Every
+// redraw costs PSRAM bandwidth that the RGB scan-out shares; big redraws
+// every second made the whole picture jump sideways.
+struct ShownState {
+  bool valid = false;
+  float elapsed = 0.0f;
+  uint16_t arcColor = 0;
+  char clock[8] = {};
+  uint16_t digitColor = 0;
+  char label[16] = {};
+  uint32_t todayMinutes = 0xFFFFFFFF;
+  uint16_t todayBlocks = 0xFFFF;
+};
+ShownState gShown;
 
 void fillCircleAA(int cx, int cy, float radius, uint16_t color, uint16_t background) {
   const int extent = static_cast<int>(radius) + 2;
@@ -97,7 +125,8 @@ void ringPoint(float fraction, float& x, float& y) {
 
 // Track plus the remaining arc. The arc covers [elapsed, 1) clockwise from
 // 12 o'clock, so the ring empties clockwise. Both arc ends are rounded.
-void drawRing(float elapsed, uint16_t arcColor, uint16_t background) {
+void drawRing(float elapsed, uint16_t arcColor, uint16_t background,
+              int clipX0 = 0, int clipY0 = 0, int clipX1 = 479, int clipY1 = 479) {
   const float half = kFocusRingStroke * 0.5f;
   const bool fullArc = elapsed <= 0.0005f;
   const bool emptyArc = elapsed >= 0.9995f;
@@ -107,9 +136,13 @@ void drawRing(float elapsed, uint16_t arcColor, uint16_t background) {
   const int extent = static_cast<int>(kFocusRingRadius + half) + 2;
   const float outer = kFocusRingRadius + half + 1.0f;
   const float inner = kFocusRingRadius - half - 1.0f;
-  for (int y = kFocusRingCenterY - extent; y <= kFocusRingCenterY + extent; ++y) {
+  const int yStart = clipY0 > kFocusRingCenterY - extent ? clipY0 : kFocusRingCenterY - extent;
+  const int yEnd = clipY1 < kFocusRingCenterY + extent ? clipY1 : kFocusRingCenterY + extent;
+  const int xStart = clipX0 > kFocusRingCenterX - extent ? clipX0 : kFocusRingCenterX - extent;
+  const int xEnd = clipX1 < kFocusRingCenterX + extent ? clipX1 : kFocusRingCenterX + extent;
+  for (int y = yStart; y <= yEnd; ++y) {
     const float dy = y + 0.5f - kFocusRingCenterY;
-    for (int x = kFocusRingCenterX - extent; x <= kFocusRingCenterX + extent; ++x) {
+    for (int x = xStart; x <= xEnd; ++x) {
       const float dx = x + 0.5f - kFocusRingCenterX;
       const float squared = dx * dx + dy * dy;
       if (squared > outer * outer || squared < inner * inner) continue;
@@ -157,28 +190,56 @@ const char* stateLabel(const FocusTimer& timer) {
   return timer.atFullDuration() ? "TAP TO START" : "PAUSED";
 }
 
-void drawDigits(const FocusTimer& timer, uint16_t background) {
+// Draws the clock. full = whole box; otherwise only the character cells that
+// differ from what is shown. flush publishes each changed cell.
+void drawDigits(const FocusTimer& timer, uint16_t background, bool full, bool flush) {
   char clock[8] = {};
   formatClock(timer.displaySeconds(), clock, sizeof(clock));
+  const uint16_t color = timer.running() ? kText : kMuted;
   const int capTop = focusDigitCapTop();
-  canvas()->fillRect(132, capTop - 6, 216, kFocusDigitCapHeight + 12, background);
-  const int width = smoothTextWidth(kSmoothFontDigits70, clock);
-  drawSmoothText(canvas(), kFocusRingCenterX - width / 2, focusDigitTextY(), clock, kSmoothFontDigits70,
-                 timer.running() ? kText : kMuted, background);
+  const int boxTop = capTop - 6;
+  const int boxHeight = kFocusDigitCapHeight + 12;
+  const int left = kFocusRingCenterX - smoothTextWidth(kSmoothFontDigits70, clock) / 2;
+  if (full || color != gShown.digitColor || strlen(clock) != strlen(gShown.clock)) {
+    canvas()->fillRect(132, boxTop, 216, boxHeight, background);
+    drawSmoothText(canvas(), left, focusDigitTextY(), clock, kSmoothFontDigits70, color, background);
+    if (flush) displayFlushRect(132, boxTop, 216, boxHeight);
+  } else {
+    int x = left;
+    for (size_t i = 0; clock[i]; ++i) {
+      const char cell[2] = {clock[i], 0};
+      const int advance = smoothTextWidth(kSmoothFontDigits70, cell);
+      if (clock[i] != gShown.clock[i]) {
+        canvas()->fillRect(x, boxTop, advance, boxHeight, background);
+        drawSmoothText(canvas(), x, focusDigitTextY(), cell, kSmoothFontDigits70, color, background);
+        if (flush) displayFlushRect(x, boxTop, advance, boxHeight);
+      }
+      x += advance;
+    }
+  }
+  memcpy(gShown.clock, clock, sizeof(clock));
+  gShown.digitColor = color;
 }
 
-void drawStateLabel(const FocusTimer& timer, uint16_t background) {
-  canvas()->fillRect(150, kLabelTop - 2, 180, kSmoothFont13.lineHeight + 4, background);
+void drawStateLabel(const FocusTimer& timer, uint16_t background, bool full, bool flush) {
   const char* label = stateLabel(timer);
+  if (!full && strcmp(label, gShown.label) == 0) return;
+  canvas()->fillRect(150, kLabelTop - 2, 180, kSmoothFont13.lineHeight + 4, background);
   drawSmoothText(canvas(), kFocusRingCenterX - smoothTextWidth(kSmoothFont13, label) / 2, kLabelTop, label,
                  kSmoothFont13, kMuted, background);
+  if (flush) displayFlushRect(150, kLabelTop - 2, 180, kSmoothFont13.lineHeight + 4);
+  strncpy(gShown.label, label, sizeof(gShown.label) - 1);
 }
 
 int todayLineTop() {
   return 480 - 22 - kSmoothFont13.lineHeight;
 }
 
-void drawToday(const FocusTimer& timer, uint16_t background) {
+void drawToday(const FocusTimer& timer, uint16_t background, bool full, bool flush) {
+  const uint32_t minutes = timer.todayFocusMs() / 60000UL;
+  if (!full && minutes == gShown.todayMinutes && timer.todayBlocks() == gShown.todayBlocks) return;
+  gShown.todayMinutes = minutes;
+  gShown.todayBlocks = timer.todayBlocks();
   const int top = todayLineTop();
   canvas()->fillRect(0, top - 2, 480, kSmoothFont13.lineHeight + 4, background);
   char total[16] = {};
@@ -198,6 +259,7 @@ void drawToday(const FocusTimer& timer, uint16_t background) {
   const int countWidth = smoothTextWidth(kSmoothFont13, blocks);
   drawSmoothText(canvas(), right - suffixWidth - countWidth, top, blocks, kSmoothFont13, kText, background);
   drawSmoothText(canvas(), right - suffixWidth, top, suffix, kSmoothFont13, kMuted, background);
+  if (flush) displayFlushRect(0, top - 2, 480, kSmoothFont13.lineHeight + 4);
 }
 
 void drawHeader(const FocusTimer& timer, uint16_t background) {
@@ -218,8 +280,8 @@ void drawHeader(const FocusTimer& timer, uint16_t background) {
     const int cx = 398 + i * 18;
     const bool done = i < timer.cycleDone();
     const bool current = !done && i == timer.cycleDone() && timer.phase() == FocusPhase::Focus;
-    fillCircleAA(cx, kHeaderCenterY, 6.0f, done || current ? kFocusColor : kDim, background);
-    if (!done) fillCircleAA(cx, kHeaderCenterY, 4.0f, background, done || current ? kFocusColor : kDim);
+    fillCircleAA(cx, kHeaderCenterY, 6.0f, done || current ? accentColor() : kDim, background);
+    if (!done) fillCircleAA(cx, kHeaderCenterY, 4.0f, background, done || current ? accentColor() : kDim);
   }
   uiDrawPageDots(1, background);
 }
@@ -295,22 +357,58 @@ void focusUiDraw(const FocusTimer& timer, FocusButton pressed, uint8_t tint) {
   Arduino_GFX* display = canvas();
   display->fillScreen(background);
   drawHeader(timer, background);
-  drawRing(elapsedFraction(timer), arcColor(timer, false), background);
-  drawDigits(timer, background);
-  drawStateLabel(timer, background);
+  const float elapsed = elapsedFraction(timer);
+  const uint16_t ring = arcColor(timer, false);
+  drawRing(elapsed, ring, background);
+  drawDigits(timer, background, true, false);
+  drawStateLabel(timer, background, true, false);
   drawButtons(timer, pressed, background);
-  drawToday(timer, background);
+  drawToday(timer, background, true, false);
   displayFlushRect(0, 0, 480, 480);
+  // A tinted frame is never the resting state; the next refresh starts over.
+  gShown.valid = tint == 0;
+  gShown.elapsed = elapsed;
+  gShown.arcColor = ring;
 }
 
 void focusUiRefresh(const FocusTimer& timer, bool pulse) {
-  drawRing(elapsedFraction(timer), arcColor(timer, pulse), kBackground);
-  drawDigits(timer, kBackground);
-  drawStateLabel(timer, kBackground);
-  displayFlushRect(kFocusRingCenterX - kRingBoxHalf, kFocusRingCenterY - kRingBoxHalf,
-                   kRingBoxHalf * 2, kRingBoxHalf * 2);
-  drawToday(timer, kBackground);
-  displayFlushRect(0, todayLineTop() - 2, 480, kSmoothFont13.lineHeight + 4);
+  if (!gShown.valid) {
+    focusUiDraw(timer, FocusButton::None, 0);
+    return;
+  }
+  const float elapsed = elapsedFraction(timer);
+  const uint16_t ring = arcColor(timer, pulse);
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  if (ring != gShown.arcColor || !focusRingPatch(gShown.elapsed, elapsed, x0, y0, x1, y1)) {
+    drawRing(elapsed, ring, kBackground);
+    drawDigits(timer, kBackground, true, false);
+    drawStateLabel(timer, kBackground, true, false);
+    displayFlushRect(kFocusRingCenterX - kRingBoxHalf, kFocusRingCenterY - kRingBoxHalf,
+                     kRingBoxHalf * 2, kRingBoxHalf * 2);
+  } else {
+    if (elapsed != gShown.elapsed) {
+      drawRing(elapsed, ring, kBackground, x0, y0, x1, y1);
+      displayFlushRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    }
+    drawDigits(timer, kBackground, false, true);
+    drawStateLabel(timer, kBackground, false, true);
+  }
+  gShown.elapsed = elapsed;
+  gShown.arcColor = ring;
+  drawToday(timer, kBackground, false, true);
+}
+
+void focusUiSetAccent(uint8_t index) {
+  gAccent = index < kAccentCount ? index : 0;
+}
+
+uint8_t focusUiCycleAccent() {
+  gAccent = static_cast<uint8_t>((gAccent + 1) % kAccentCount);
+  return gAccent;
+}
+
+bool focusUiHitTitle(int16_t x, int16_t y) {
+  return y < 54 && x < 200;
 }
 
 void focusUiRefreshButtons(const FocusTimer& timer, FocusButton pressed) {

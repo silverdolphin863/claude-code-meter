@@ -28,6 +28,25 @@ inline bool focusArcCovers(float clockwiseFraction, float elapsedFraction) {
   return clockwiseFraction >= elapsedFraction;
 }
 
+// Pixel box that covers the ring change from one elapsed fraction to the next
+// (both rounded arc ends plus anti-aliasing). Returns false when the move is
+// too large for a patch and the whole ring must be redrawn.
+inline bool focusRingPatch(float fromElapsed, float toElapsed, int& x0, int& y0, int& x1, int& y1) {
+  const float delta = toElapsed - fromElapsed;
+  if (delta < 0.0f || delta > 0.02f) return false;
+  const float twoPi = 2.0f * 3.14159265f;
+  const float ax = kFocusRingCenterX + sinf(fromElapsed * twoPi) * kFocusRingRadius;
+  const float ay = kFocusRingCenterY - cosf(fromElapsed * twoPi) * kFocusRingRadius;
+  const float bx = kFocusRingCenterX + sinf(toElapsed * twoPi) * kFocusRingRadius;
+  const float by = kFocusRingCenterY - cosf(toElapsed * twoPi) * kFocusRingRadius;
+  const float pad = kFocusRingStroke * 0.5f + 3.0f;
+  x0 = static_cast<int>(floorf(fminf(ax, bx) - pad));
+  y0 = static_cast<int>(floorf(fminf(ay, by) - pad));
+  x1 = static_cast<int>(ceilf(fmaxf(ax, bx) + pad));
+  y1 = static_cast<int>(ceilf(fmaxf(ay, by) + pad));
+  return true;
+}
+
 // drawSmoothText y argument that puts the digits' cap box centre on the ring
 // centre, independent of the state label below.
 constexpr int focusDigitTextY() {
