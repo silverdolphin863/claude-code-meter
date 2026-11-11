@@ -74,7 +74,7 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.3\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.4\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
 }
@@ -164,18 +164,17 @@ void test_focus_timer_final_countdown_and_finish() {
   TEST_ASSERT_EQUAL_UINT32(300, timer.displaySeconds());
 }
 
-void test_focus_cycle_gives_long_break_after_four_blocks() {
+void test_focus_cycle_has_no_long_break() {
   FocusTimer timer;
   uint32_t now = 0;
   for (int block = 0; block < 4; ++block) {
     TEST_ASSERT_EQUAL_UINT8(block + 1, timer.blockNumber());
     timer.start(now); now += kFocusMs; timer.tick(now);
-    if (block < 3) {
-      TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(timer.phase()));
-      timer.skip(now);
-    }
+    // Every break is a five minute short break, including after the fourth block.
+    TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(timer.phase()));
+    TEST_ASSERT_EQUAL_UINT32(300, timer.displaySeconds());
+    if (block < 3) timer.skip(now);
   }
-  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::LongBreak), static_cast<int>(timer.phase()));
   TEST_ASSERT_EQUAL_UINT8(4, timer.cycleDone());
   timer.skip(now);
   TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::Focus), static_cast<int>(timer.phase()));
@@ -207,6 +206,16 @@ void test_focus_day_change_clears_today_only_from_a_known_day() {
   const uint64_t epoch = 1794267000000ULL;
   TEST_ASSERT_EQUAL_INT32(focusDayKey(epoch, true, 0) + 1, focusDayKey(epoch, true, 60));
   TEST_ASSERT_EQUAL_INT32(kUnknownDay, focusDayKey(epoch, false, 60));
+}
+
+void test_focus_restore_turns_old_long_break_into_short() {
+  FocusSaved saved;
+  saved.phase = static_cast<uint8_t>(FocusPhase::LongBreak);
+  saved.remainingMs = 12UL * 60UL * 1000UL;
+  FocusTimer restored;
+  restored.restore(saved);
+  TEST_ASSERT_EQUAL(static_cast<int>(FocusPhase::ShortBreak), static_cast<int>(restored.phase()));
+  TEST_ASSERT_EQUAL_UINT32(300, restored.displaySeconds());
 }
 
 void test_focus_restore_comes_back_paused() {
@@ -300,10 +309,11 @@ int main() {
   RUN_TEST(test_age_and_pace_helpers);
   RUN_TEST(test_focus_timer_counts_down_and_credits_active_time);
   RUN_TEST(test_focus_timer_final_countdown_and_finish);
-  RUN_TEST(test_focus_cycle_gives_long_break_after_four_blocks);
+  RUN_TEST(test_focus_cycle_has_no_long_break);
   RUN_TEST(test_focus_skip_does_not_credit_a_block);
   RUN_TEST(test_focus_day_change_clears_today_only_from_a_known_day);
   RUN_TEST(test_focus_restore_comes_back_paused);
+  RUN_TEST(test_focus_restore_turns_old_long_break_into_short);
   RUN_TEST(test_focus_ring_empties_clockwise_from_twelve);
   RUN_TEST(test_focus_digits_are_centred_on_the_ring);
   RUN_TEST(test_usage_payload_reads_optional_utc_offset);

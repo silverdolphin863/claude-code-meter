@@ -76,9 +76,10 @@ void FocusTimer::finishPhase(bool credited) {
   if (phase_ == FocusPhase::Focus) {
     if (credited) ++todayBlocks_;
     if (cycleDone_ < kFocusBlocksPerCycle) ++cycleDone_;
-    phase_ = cycleDone_ >= kFocusBlocksPerCycle ? FocusPhase::LongBreak : FocusPhase::ShortBreak;
+    // Every break is short; a set of four only groups the blocks on screen.
+    phase_ = FocusPhase::ShortBreak;
   } else {
-    if (phase_ == FocusPhase::LongBreak) cycleDone_ = 0;
+    if (cycleDone_ >= kFocusBlocksPerCycle) cycleDone_ = 0;
     phase_ = FocusPhase::Focus;
   }
   remainingMs_ = totalMs();
@@ -130,8 +131,11 @@ FocusSaved FocusTimer::save() const {
 }
 
 void FocusTimer::restore(const FocusSaved& saved) {
-  phase_ = saved.phase <= static_cast<uint8_t>(FocusPhase::LongBreak)
-               ? static_cast<FocusPhase>(saved.phase)
+  // Long breaks no longer exist; a long break saved by older firmware resumes
+  // as a short one.
+  phase_ = saved.phase == static_cast<uint8_t>(FocusPhase::ShortBreak) ||
+                   saved.phase == static_cast<uint8_t>(FocusPhase::LongBreak)
+               ? FocusPhase::ShortBreak
                : FocusPhase::Focus;
   cycleDone_ = saved.cycleDone > kFocusBlocksPerCycle ? 0 : saved.cycleDone;
   remainingMs_ = saved.remainingMs == 0 || saved.remainingMs > totalMs() ? totalMs() : saved.remainingMs;
