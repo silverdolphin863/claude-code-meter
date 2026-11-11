@@ -15,6 +15,7 @@ const AUTOSTART_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 // Task Manager's Startup tab both use.
 const AUTOSTART_NAME = 'CC Meter';
 import { HardwareDisplayController } from './hardware-display.mjs';
+import { FocusLog } from './focus-log.mjs';
 import { constrainCompactBounds } from './window-geometry.mjs';
 import { checkForUpdates } from './updater.mjs';
 
@@ -27,8 +28,13 @@ const hardwareDisplay = new HardwareDisplayController({
   bridgePath: HARDWARE_BRIDGE,
   loadUsage: getPanelUsage,
   onChange: () => publishHardwareState(),
-  onFocusEvent: (event) => playFocusSound(event),
+  onFocusEvent: (event) => {
+    playFocusSound(event);
+    try { focusLog?.record(event); } catch { /* the log must never break the bridge */ }
+  },
 });
+// Created once userData is pinned (see below); events before that are sounds only.
+let focusLog = null;
 
 // The panel's focus timer has no speaker, so its events play here, in a
 // hidden window that may start audio without a user gesture.
@@ -836,6 +842,8 @@ if (!process.env.WIDGET_CAPTURE && !app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  focusLog = new FocusLog({ dir: app.getPath('userData') });
+  focusLog.start();
   await configureHardwareDisplay();
   const win = createWindow();
   mainWindow = win;
@@ -897,6 +905,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  focusLog?.stop();
   quitting = true;
   hardwareDisplay.stop();
 });

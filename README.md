@@ -93,6 +93,21 @@ The firmware ZIP includes the full offline setup guide, checksum validation,
 automatic CH340 port detection, and a flashing script that refuses to continue
 unless it has first saved a complete 16 MB factory backup.
 
+### Focus blocks webhook
+
+Every focus block the panel finishes in full (not skipped or reset) is saved in
+`focus-blocks.json` in the CC Meter settings folder (`%APPDATA%\CC Meter`). To
+send each block to another service, create `focus-webhook.json` in the same
+folder:
+
+```json
+{ "url": "https://example.com/hook", "headers": { "Authorization": "Bearer <token>" } }
+```
+
+CC Meter then POSTs `{"type":"focus-block","id":"...","startedAt":"...","endedAt":"...","seconds":1500}`
+once per block and retries every five minutes until the webhook answers with a
+2xx status. Only `https` URLs (or localhost) are used.
+
 ## Install
 
 Download `CCMeter-Setup-x.y.z.exe` from

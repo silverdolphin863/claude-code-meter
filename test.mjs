@@ -688,7 +688,7 @@ assert.match(firmwareUiSource, /kHeaderStatusMaxWidth = 24;/,
   'firmware must enforce the fixed-width LCD header status slot');
 assert.match(firmwareUiSource, /smoothTextWidth\(kSmoothFont11, rawStatus\) <= kHeaderStatusMaxWidth[\s\S]*\? rawStatus[\s\S]*: "ERR";/,
   'an oversized future LCD header label must fall back before it can overlap freshness');
-assert.match(firmwareUiSource, /display->flush\(\);/,
+assert.match(await fs.readFile(new URL('./firmware/esp32-4848s040/src/display.cpp', import.meta.url), 'utf8'), /gfx->flush\(\);/,
   'firmware must publish the LCD framebuffer only after composing a complete frame');
 assert.match(firmwareUiSource, /void refreshLimitTime[\s\S]*displayFlushRect\(/,
   'minute-driven LCD changes must flush only the small regions that changed');
@@ -1074,4 +1074,42 @@ try {
   fallbackChild?.kill();
   await new Promise((resolve) => mockUsageApi.close(resolve));
   await fs.rm(root, { recursive: true, force: true });
+}
+
+{
+  const { FocusLog, isFinishedFocusBlock, addBlock } = await import('./focus-log.mjs');
+  assert.equal(isFinishedFocusBlock({ event: 'done', phase: 'short' }), true, 'a finished block reports the break phase');
+  assert.equal(isFinishedFocusBlock({ event: 'done', phase: 'long' }), true);
+  assert.equal(isFinishedFocusBlock({ event: 'done', phase: 'focus' }), false, 'a finished break is not a block');
+  assert.equal(isFinishedFocusBlock({ event: 'skip', phase: 'short' }), false, 'a skipped block earns nothing');
+  const first = addBlock([], Date.parse('2026-11-11T10:25:00Z'), 'a');
+  assert.equal(first.added.startedAt, '2026-11-11T10:00:00.000Z');
+  assert.equal(addBlock(first.blocks, Date.parse('2026-11-11T10:25:30Z'), 'b').added, null, 'a repeated done is one block');
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ccmeter-focus-'));
+  try {
+    const calls = [];
+    let up = false;
+    const log = new FocusLog({ dir, now: () => Date.parse('2026-11-11T10:25:00Z'),
+      fetchImpl: async (url, init) => { calls.push({ url, init }); return { ok: up }; } });
+    assert.equal(log.record({ event: 'done', phase: 'short' }).seconds, 1500);
+    await log.flush();
+    assert.equal(calls.length, 0, 'nothing is sent without a webhook');
+    await fs.writeFile(path.join(dir, 'focus-webhook.json'), JSON.stringify({ url: 'https://hook.example/x', headers: { 'X-API-Key': 'k', 'bad key': 'v' } }));
+    await log.flush();
+    assert.equal(calls.length, 1);
+    assert.equal(log.read()[0].sent, false, 'a failed send stays queued');
+    up = true;
+    await log.flush();
+    assert.equal(log.read()[0].sent, true);
+    const sentBody = JSON.parse(calls[1].init.body);
+    assert.equal(sentBody.type, 'focus-block');
+    assert.equal(calls[1].init.headers['X-API-Key'], 'k');
+    assert.equal(calls[1].init.headers['bad key'], undefined);
+    await log.flush();
+    assert.equal(calls.length, 2, 'a sent block is never sent again');
+    console.log('focus block log: PASS');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
