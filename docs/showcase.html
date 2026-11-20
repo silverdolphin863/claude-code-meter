@@ -45,23 +45,23 @@
 
     .copy {
       position: absolute;
-      top: 68px;
-      left: 72px;
-      width: 570px;
+      top: 64px;
+      left: 64px;
+      width: 560px;
     }
 
     .brand {
       display: flex;
       align-items: center;
       gap: 15px;
-      margin-bottom: 44px;
+      margin-bottom: 38px;
     }
 
     .brand img {
       width: 54px;
       height: 54px;
       border-radius: 14px;
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
     }
 
     .brand-name {
@@ -73,25 +73,25 @@
     .brand-type {
       margin-top: 3px;
       color: #8f879f;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 700;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.14em;
     }
 
     h1 {
-      max-width: 560px;
+      max-width: 550px;
       margin: 0;
-      font-size: 58px;
-      line-height: 1.02;
+      font-size: 56px;
+      line-height: 1.03;
       letter-spacing: -0.045em;
       font-weight: 780;
     }
 
     .lead {
-      max-width: 540px;
-      margin: 25px 0 31px;
+      max-width: 535px;
+      margin: 22px 0 28px;
       color: #b8b0c7;
-      font-size: 21px;
+      font-size: 20px;
       line-height: 1.48;
     }
 
@@ -103,7 +103,7 @@
 
     .feature {
       display: grid;
-      grid-template-columns: 5px 136px 1fr;
+      grid-template-columns: 5px 146px 1fr;
       align-items: center;
       min-height: 52px;
       padding: 0 18px 0 0;
@@ -120,65 +120,125 @@
     }
 
     .feature strong {
-      padding-left: 17px;
+      padding-left: 16px;
       color: #f1edf8;
-      font-size: 15px;
+      font-size: 14.5px;
       letter-spacing: 0.01em;
     }
 
     .feature span {
       color: #948ca3;
-      font-size: 14px;
+      font-size: 13.5px;
     }
 
     .footnote {
-      margin-top: 25px;
+      margin-top: 26px;
       color: #746d82;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 700;
       letter-spacing: 0.12em;
     }
 
     .product-stage {
       position: absolute;
-      top: 56px;
-      right: 38px;
-      width: 560px;
-      height: 614px;
-      background: #15131c;
+      top: 46px;
+      right: 44px;
+      width: 582px;
+      height: 628px;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 45%, #1d1a29 0%, #14121b 72%);
       border: 1px solid #302a3b;
-      border-radius: 34px;
+      border-radius: 30px;
     }
 
     .product-stage::before {
       content: "";
       position: absolute;
-      top: 24px;
+      top: 21px;
       right: 24px;
-      width: 12px;
-      height: 12px;
+      width: 11px;
+      height: 11px;
       border-radius: 999px;
       background: #38d47d;
-      box-shadow: -22px 0 #ffb348, -44px 0 #ff625f;
+      box-shadow: -20px 0 #ffb348, -40px 0 #ff625f;
     }
 
     .stage-label {
       position: absolute;
-      top: 22px;
+      top: 20px;
       left: 26px;
       color: #8d849d;
       font-size: 11px;
       font-weight: 750;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.15em;
+    }
+
+    .bezel-wrap {
+      position: absolute;
+      top: 52px;
+      left: 28px;
+      width: 504px;
+      height: 504px;
+      padding: 12px;
+      background: linear-gradient(145deg, #272433 0%, #0d0c12 45%, #1d1a27 100%);
+      border: 1px solid #3d374e;
+      border-radius: 18px;
+      box-shadow: 0 26px 48px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .usbc-plug {
+      position: absolute;
+      top: 276px;
+      right: -24px;
+      width: 24px;
+      height: 44px;
+      background: linear-gradient(180deg, #4b4757 0%, #2a2733 50%, #3b3746 100%);
+      border: 1px solid #595468;
+      border-left: 0;
+      border-radius: 0 6px 6px 0;
+      box-shadow: 6px 8px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    .usbc-cord {
+      position: absolute;
+      top: 290px;
+      right: -54px;
+      width: 32px;
+      height: 16px;
+      background: repeating-linear-gradient(135deg, #322f3c 0 4px, #211f29 4px 8px);
+      border-top: 1px solid #433f4f;
+      border-bottom: 1px solid #16141d;
     }
 
     .panel-shot {
+      display: block;
+      width: 480px;
+      height: 480px;
+      border-radius: 7px;
+      image-rendering: -webkit-optimize-contrast;
+    }
+
+    .stage-footer {
       position: absolute;
-      top: 45px;
-      left: 25px;
-      width: 510px;
-      height: auto;
-      filter: drop-shadow(0 24px 35px rgba(0, 0, 0, 0.38));
+      bottom: 20px;
+      left: 26px;
+      right: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #8f879f;
+      font-size: 11.5px;
+      font-weight: 650;
+      letter-spacing: 0.08em;
+    }
+
+    .stage-footer .pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #1e1c27;
+      border: 1px solid #322d40;
+      color: #c8c1d8;
+      font-size: 11px;
     }
   </style>
 </head>
@@ -191,34 +251,42 @@
         <img src="../build/icon.png" alt="">
         <div>
           <div class="brand-name">CC Meter</div>
-          <div class="brand-type">WINDOWS TRAY GAUGE</div>
+          <div class="brand-type">WINDOWS TRAY + ESP32 USB DISPLAY</div>
         </div>
       </div>
 
       <h1>Know when your AI quota will run out.</h1>
-      <p class="lead">Current Claude Code and Codex limits, reset times, and burn pace in one local tray widget.</p>
+      <p class="lead">Live Claude Code, Codex, and Gemini rate limits, reset times, and burn pace — in a minimal tray strip or a ~$25 USB desk touch screen.</p>
 
       <div class="features">
         <div class="feature" style="--feature-color:#38d47d">
-          <strong>Current limits</strong>
-          <span>Account-wide usage from both tools</span>
+          <strong>Three providers</strong>
+          <span>Claude Code, Codex &amp; Gemini (Antigravity)</span>
         </div>
         <div class="feature" style="--feature-color:#ffb348">
-          <strong>Reset times</strong>
-          <span>See exactly when each window renews</span>
+          <strong>Burn pace</strong>
+          <span>See instantly if you will hit the wall early</span>
         </div>
         <div class="feature" style="--feature-color:#ff625f">
-          <strong>Burn pace</strong>
-          <span>Know if you will hit the wall early</span>
+          <strong>ESP32 display</strong>
+          <span>One USB-C cable · 0 credentials on device</span>
         </div>
       </div>
 
-      <div class="footnote">WINDOWS / LOCAL-ONLY / MIT</div>
+      <div class="footnote">WINDOWS / ESP32-4848S040 / LOCAL-ONLY / MIT</div>
     </section>
 
-    <section class="product-stage" aria-label="CC Meter full panel">
-      <div class="stage-label">FULL PANEL</div>
-      <img class="panel-shot" src="panel.png" alt="CC Meter full panel showing Claude Code and Codex usage">
+    <section class="product-stage" aria-label="CC Meter 480x480 ESP32 display">
+      <div class="stage-label">ESP32-4848S040 · 480×480 TOUCH LCD</div>
+      <div class="bezel-wrap">
+        <img class="panel-shot" src="lcd-preview.png" alt="CC Meter 480x480 LCD showing Claude Code, Codex, and Gemini usage">
+        <div class="usbc-plug" aria-hidden="true"></div>
+        <div class="usbc-cord" aria-hidden="true"></div>
+      </div>
+      <div class="stage-footer">
+        <span>POWER + DATA OVER ONE USB CABLE</span>
+        <span class="pill">+ WINDOWS TRAY STRIP</span>
+      </div>
     </section>
   </main>
 </body>

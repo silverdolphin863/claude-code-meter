@@ -3,9 +3,11 @@
 A tray widget for Windows that shows how much of your **Claude Code**, **Codex**, and
 **Gemini** (Antigravity) rate limits you have burned, and how fast you are burning them.
 
+**[Website & Interactive Preview](https://silverdolphin863.github.io/claude-code-meter/)** · **[Latest Release](https://github.com/silverdolphin863/claude-code-meter/releases/latest)**
+
 ![CC Meter overview](docs/showcase.png)
 
-<p align="center"><sub>Representative usage rendered by the full panel at native resolution.</sub></p>
+<p align="center"><sub>CC Meter 480x480 ESP32-4848S040 USB desk display and Windows tray gauge.</sub></p>
 
 Not a cost tracker. It answers the only question that matters mid-session: *am I
 going to hit the wall before this window resets?*
@@ -36,7 +38,7 @@ summary, and click it to show or hide the panel without taking focus from your
 current window.
 
 <p align="center">
-  <img src="docs/panel.png" width="510" alt="CC Meter full panel with Claude Code and Codex usage, reset times, and pace badges">
+  <img src="docs/panel.png" width="380" alt="CC Meter full panel with Claude Code, Codex, and Gemini usage, reset times, and pace badges">
 </p>
 
 The compact mode stays out of the way at the top edge. [Open the compact strip

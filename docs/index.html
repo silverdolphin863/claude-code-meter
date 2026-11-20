@@ -1,0 +1,1812 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CC Meter — Live Claude Code, Codex &amp; Gemini Quota Gauge + ESP32 USB Display</title>
+  <meta name="description" content="Open-source Windows tray widget and ~$25 ESP32-4848S040 USB touch display showing Claude Code, Codex, and Gemini (Antigravity) rate limits, burn pace, and reset countdowns. Local-only, MIT.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://silverdolphin863.github.io/claude-code-meter/">
+  <meta property="og:title" content="CC Meter — Know when your AI quota will run out">
+  <meta property="og:description" content="Live Claude Code, Codex, and Gemini rate limits, reset times, and burn pace in a Windows tray strip and an optional ~$25 USB touch display. Local-only, MIT.">
+  <meta property="og:image" content="https://silverdolphin863.github.io/claude-code-meter/showcase.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="720">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CC Meter — Live Claude Code, Codex &amp; Gemini Quota Gauge + ESP32 USB Display">
+  <meta name="twitter:description" content="Rate limits, reset countdowns, burn pace, and a built-in Pomodoro timer on Windows and a ~$25 ESP32-4848S040 USB touch screen. Local-only, MIT.">
+  <meta name="twitter:image" content="https://silverdolphin863.github.io/claude-code-meter/showcase.png">
+  <meta name="theme-color" content="#14131a">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='.5' y='.5' width='23' height='23' rx='6' fill='%231e1c27' stroke='%232f2c3b'/%3E%3Crect x='5' y='5' width='14' height='3' rx='1.5' fill='%23262332'/%3E%3Crect x='5' y='5' width='10' height='3' rx='1.5' fill='%2339d98a'/%3E%3Crect x='5' y='10.5' width='14' height='3' rx='1.5' fill='%23262332'/%3E%3Crect x='5' y='10.5' width='7' height='3' rx='1.5' fill='%23ffca3b'/%3E%3Crect x='5' y='16' width='14' height='3' rx='1.5' fill='%23262332'/%3E%3Crect x='5' y='16' width='12' height='3' rx='1.5' fill='%23ff5b5b'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0e0d14;
+      --bg-elev: #14131a;
+      --card: #1b1925;
+      --card-hi: #211e2d;
+      --line: #2d293a;
+      --line-hi: #3f3a52;
+      --ink: #f4f2f9;
+      --muted: #9d96b3;
+      --dim: #706986;
+      --track: #262332;
+      --track-tex: #333041;
+      --badge: #302d39;
+      --ok: #39d98a;
+      --warn: #ffca3b;
+      --orange: #ff9f45;
+      --hot: #ff5b5b;
+      --accent: #a78bfa;
+      --focus: #ff7a59;
+      --sans: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+      --max: 1160px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--bg); color: var(--ink); }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--ink);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    img { max-width: 100%; display: block; }
+    code {
+      font-family: var(--mono);
+      font-size: 0.86em;
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: #252233;
+      border: 1px solid #343046;
+      color: #ddd7ec;
+      overflow-wrap: anywhere;
+    }
+
+    /* Top telemetry accent bar */
+    .top-bar-accent {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      display: flex;
+      z-index: 60;
+    }
+    .top-bar-accent span:nth-child(1) { flex: 1; background: var(--ok); }
+    .top-bar-accent span:nth-child(2) { flex: 1; background: var(--warn); }
+    .top-bar-accent span:nth-child(3) { flex: 1; background: var(--hot); }
+
+    /* Navigation */
+    .nav {
+      position: sticky;
+      top: 3px;
+      z-index: 50;
+      background: rgba(14, 13, 20, 0.84);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(45, 41, 58, 0.85);
+    }
+    .nav-inner {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+    .brand svg { width: 26px; height: 26px; flex: none; }
+    .ver-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--card);
+      border: 1px solid var(--line);
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      margin-left: auto;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .nav-links a:hover { color: var(--ink); }
+    .nav-actions { display: flex; align-items: center; gap: 10px; }
+
+    .hero-grid > *, .pace-layout > *, .hw-grid > *, .desktop-grid > *, .notes-grid > *, .providers-grid > * {
+      min-width: 0;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-family: var(--sans);
+      font-weight: 600;
+      font-size: 14px;
+      padding: 9px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--line-hi);
+      background: var(--card);
+      color: var(--ink);
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+      white-space: nowrap;
+    }
+    .btn:hover { border-color: #5a5275; background: var(--card-hi); }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary {
+      background: var(--ok);
+      border-color: var(--ok);
+      color: #0b1912;
+      font-weight: 700;
+      box-shadow: 0 6px 24px rgba(57, 217, 138, 0.22);
+    }
+    .btn-primary:hover {
+      background: #4ee39a;
+      border-color: #4ee39a;
+      box-shadow: 0 8px 28px rgba(57, 217, 138, 0.32);
+    }
+    .btn-lg { padding: 12px 20px; font-size: 15px; border-radius: 11px; }
+    .btn-sm { padding: 7px 12px; font-size: 13px; border-radius: 8px; }
+    .btn svg { width: 16px; height: 16px; flex: none; }
+
+    .container { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+    section.block { padding: 84px 0; border-top: 1px solid rgba(45, 41, 58, 0.65); }
+
+    /* Hero */
+    .hero {
+      position: relative;
+      padding: 56px 0 76px;
+      background:
+        radial-gradient(640px 420px at 78% 36%, rgba(167, 139, 250, 0.09), transparent 70%),
+        radial-gradient(520px 360px at 18% 20%, rgba(57, 217, 138, 0.06), transparent 68%),
+        linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+      background-size: auto, auto, 44px 44px, 44px 44px;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(0, 520px);
+      gap: 44px;
+      align-items: center;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      background: rgba(27, 25, 37, 0.9);
+      border: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      margin-bottom: 22px;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 10px rgba(57, 217, 138, 0.7);
+    }
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(38px, 4.8vw, 56px);
+      line-height: 1.04;
+      letter-spacing: -0.04em;
+      font-weight: 800;
+    }
+    .hero-lead {
+      margin: 20px 0 28px;
+      font-size: 18px;
+      line-height: 1.6;
+      color: #bdb6cf;
+      max-width: 540px;
+    }
+    .hero-lead strong { color: var(--ink); font-weight: 600; }
+    .hero-ctas {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 26px;
+    }
+    .hero-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .hero-facts span {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .hero-facts i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--dim);
+      display: inline-block;
+    }
+
+    /* Interactive 480x480 ESP32 Simulator in Hero */
+    .sim-column {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .sim-tabs {
+      display: inline-flex;
+      padding: 4px;
+      gap: 4px;
+      border-radius: 11px;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      margin-bottom: 14px;
+    }
+    .sim-tab {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 140ms, color 140ms;
+    }
+    .sim-tab:hover { color: var(--ink); }
+    .sim-tab.active { background: var(--card-hi); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-hi); }
+
+    .hw-bezel {
+      position: relative;
+      width: 100%;
+      max-width: 504px;
+      padding: 12px;
+      background: linear-gradient(145deg, #292536 0%, #0d0c12 45%, #1d1a27 100%);
+      border: 1px solid #403a53;
+      border-radius: 20px;
+      box-shadow: 0 28px 64px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+    .hw-usbc {
+      position: absolute;
+      top: 56%;
+      right: -20px;
+      width: 20px;
+      height: 40px;
+      background: linear-gradient(180deg, #4b4757 0%, #2a2733 50%, #3b3746 100%);
+      border: 1px solid #595468;
+      border-left: 0;
+      border-radius: 0 6px 6px 0;
+      box-shadow: 6px 8px 16px rgba(0, 0, 0, 0.4);
+    }
+    .hw-usbc::after {
+      content: "";
+      position: absolute;
+      top: 12px;
+      right: -18px;
+      width: 18px;
+      height: 14px;
+      background: repeating-linear-gradient(135deg, #322f3c 0 4px, #211f29 4px 8px);
+      border-radius: 0 3px 3px 0;
+      mask-image: linear-gradient(90deg, #000 35%, transparent 100%);
+      -webkit-mask-image: linear-gradient(90deg, #000 35%, transparent 100%);
+    }
+
+    /* Scaled 480x480 viewport so typography stays exact at any screen size */
+    .lcd-viewport {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      overflow: hidden;
+      border-radius: 8px;
+      background: #14131a;
+      user-select: none;
+      touch-action: pan-y;
+    }
+    .lcd-stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 480px;
+      height: 480px;
+      transform-origin: top left;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+      background: #14131a;
+      overflow: hidden;
+    }
+    .lcd-pages {
+      display: flex;
+      width: 960px;
+      height: 480px;
+      transition: transform 280ms cubic-bezier(0.2, 0.85, 0.25, 1);
+    }
+    .lcd-page {
+      width: 480px;
+      height: 480px;
+      position: relative;
+      flex: none;
+    }
+    .lcd-dots {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 22px;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      z-index: 5;
+      pointer-events: auto;
+    }
+    .lcd-dots button {
+      border: 0;
+      padding: 0;
+      height: 6px;
+      width: 6px;
+      border-radius: 3px;
+      background: #625c78;
+      cursor: pointer;
+      transition: width 180ms, background 180ms;
+    }
+    .lcd-dots button.on { width: 16px; background: var(--ink); }
+
+    /* Page 0: Exact 480x480 CC Meter 3-card screen */
+    .lcd-header {
+      height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 17px;
+    }
+    .lcd-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+    .lcd-brand svg { width: 24px; height: 24px; flex: none; }
+    .lcd-brand strong { font-size: 18px; letter-spacing: -0.035em; line-height: 1; }
+    .lcd-conn {
+      width: 74px;
+      height: 24px;
+      display: grid;
+      grid-template-columns: 24px 8px 24px;
+      align-items: center;
+      column-gap: 9px;
+      flex: none;
+    }
+    .lcd-age { font-size: 11px; color: #8b85a0; text-align: right; }
+    .lcd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px rgba(57,217,138,0.45); }
+    .lcd-status { font-size: 10px; font-weight: 700; color: var(--ok); text-align: right; }
+    .lcd-conn[data-tone="warn"] .lcd-dot { background: var(--warn); box-shadow: 0 0 8px rgba(255,202,59,0.45); }
+    .lcd-conn[data-tone="warn"] .lcd-status { color: var(--warn); }
+    .lcd-icon-btn {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #8b85a0;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+    .lcd-icon-btn:hover { color: var(--ink); background: rgba(255,255,255,0.06); }
+    .lcd-icon-btn.active { color: var(--accent); }
+    .lcd-icon-btn.spinning { color: var(--accent); }
+    .lcd-icon-btn.spinning svg { animation: spin 750ms linear infinite; }
+    .lcd-icon-btn svg {
+      width: 18px; height: 18px; fill: none; stroke: currentColor;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .lcd-main {
+      height: 430px;
+      padding: 0 14px 7px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .lcd-page[data-view="setup"] .lcd-main { display: none; }
+    .lcd-setup {
+      display: none;
+      height: 430px;
+      padding: 14px 14px 80px;
+    }
+    .lcd-page[data-view="setup"] .lcd-setup { display: block; }
+    .lcd-setup-card {
+      height: 336px;
+      padding: 22px 20px;
+      background: #1e1c27;
+      border: 1px solid #2f2c3b;
+      border-radius: 15px;
+    }
+    .lcd-card {
+      width: 100%;
+      padding: 5px 14px 7px;
+      background: #1e1c27;
+      border: 1px solid #2f2c3b;
+      border-radius: 13px;
+    }
+    .lcd-card.claude { height: 195px; }
+    .lcd-card.codex { height: 79px; }
+    .lcd-card.gemini { height: 137px; }
+    .lcd-provider {
+      height: 16px;
+      display: flex;
+      align-items: baseline;
+      color: #8b85a0;
+      font-size: 13px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .lcd-row { height: 51px; margin-top: 2px; }
+    .lcd-row + .lcd-row { margin-top: 7px; }
+    .lcd-head { height: 21px; display: flex; align-items: center; gap: 9px; }
+    .lcd-label {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 18px; line-height: 1; font-weight: 600; letter-spacing: -0.025em;
+    }
+    .lcd-pct { width: 50px; text-align: right; font-size: 18px; line-height: 1; font-weight: 700; color: var(--ok); }
+    .lcd-pct.warn { color: var(--warn); }
+    .lcd-pace {
+      min-width: 54px; height: 20px; padding: 2px 7px; border-radius: 5px;
+      background: var(--badge); color: var(--ok); font-size: 15px; line-height: 16px; font-weight: 700; text-align: center;
+    }
+    .lcd-pace.warn { color: var(--warn); }
+    .lcd-track {
+      height: 10px; margin-top: 2px; border-radius: 5px; overflow: hidden;
+      background: repeating-linear-gradient(135deg, transparent 0 6px, var(--track-tex) 6px 8px), var(--track);
+    }
+    .lcd-fill { height: 100%; min-width: 10px; border-radius: inherit; background: var(--ok); }
+    .lcd-fill.warn { background: var(--warn); }
+    .lcd-reset {
+      height: 16px; margin-top: 5px; display: flex; align-items: center; gap: 6px;
+      font-size: 12px; line-height: 1; color: #8b85a0;
+    }
+    .lcd-clock { width: 11px; height: 11px; flex: none; fill: none; stroke: #625c78; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .lcd-countdown { color: #b8b2c8; font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+    .lcd-target { margin-left: auto; color: #625c78; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+
+    /* Page 1: Interactive Focus Timer */
+    .fp-head {
+      position: absolute; top: 18px; left: 22px; right: 22px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .fp-mode {
+      font-size: 15px; font-weight: 700; letter-spacing: 0.14em;
+      background: transparent; border: 0; color: var(--ink); padding: 0; cursor: pointer;
+      font-family: inherit;
+    }
+    .fp-mode i { font-style: normal; color: #8b85a0; font-weight: 500; letter-spacing: 0.04em; margin-left: 8px; }
+    .fp-cycle { display: flex; gap: 6px; }
+    .fp-cycle span { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #625c78; }
+    .fp-cycle span.done { background: var(--focus); border-color: var(--focus); }
+    .fp-cycle span.now { border-color: var(--focus); }
+    .fp-ring {
+      position: absolute; left: 50%; top: 54px; width: 272px; height: 272px; margin-left: -136px;
+      cursor: pointer;
+    }
+    .fp-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .fp-ring .track { stroke: var(--track); }
+    .fp-ring .arc { stroke: var(--focus); stroke-linecap: round; transition: stroke 260ms; }
+    .fp-ring.break .arc { stroke: var(--ok); }
+    .fp-ring.paused .arc { stroke: #625c78; }
+    .fp-ring.final .arc { stroke: var(--warn); }
+    .fp-time {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      font-size: 70px; font-weight: 700; letter-spacing: -0.02em; line-height: 1;
+    }
+    .fp-time small {
+      position: absolute; left: 0; right: 0; top: calc(50% + 46px); text-align: center;
+      font-size: 13px; font-weight: 600; color: #8b85a0; letter-spacing: 0.14em;
+    }
+    .fp-ring.paused .fp-time { color: #8b85a0; }
+    .fp-controls {
+      position: absolute; left: 0; right: 0; top: 340px;
+      display: flex; justify-content: center; align-items: center; gap: 26px;
+    }
+    .fp-btn {
+      width: 64px; height: 64px; border-radius: 50%; border: 0;
+      display: grid; place-items: center; cursor: pointer;
+      background: #1e1c27; box-shadow: inset 0 0 0 2px #2f2c3b;
+      transition: transform 90ms ease-out;
+    }
+    .fp-btn.main { width: 76px; height: 76px; background: var(--focus); box-shadow: 0 6px 22px rgba(255, 122, 89, 0.3); }
+    .fp-ring.break ~ .fp-controls .fp-btn.main { background: var(--ok); box-shadow: 0 6px 22px rgba(57, 217, 138, 0.28); }
+    .fp-btn:active { transform: scale(0.9); }
+    .fp-btn svg { width: 26px; height: 26px; fill: var(--ink); }
+    .fp-btn.main svg { width: 30px; height: 30px; fill: #14131a; }
+    .fp-today {
+      position: absolute; left: 22px; right: 22px; bottom: 22px;
+      display: flex; justify-content: space-between; font-size: 13px; color: #8b85a0;
+    }
+    .fp-today b { color: var(--ink); font-weight: 600; }
+
+    .sim-caption {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      max-width: 504px;
+      font-size: 12.5px;
+      color: var(--dim);
+    }
+    .sim-speed {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+    }
+    .sim-speed button {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .sim-speed button.on { color: var(--ink); border-color: var(--accent); }
+
+    /* Section typography */
+    .section-eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .section-title {
+      margin: 0 0 14px;
+      font-size: clamp(26px, 3.2vw, 36px);
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+      font-weight: 800;
+    }
+    .section-sub {
+      margin: 0 0 38px;
+      color: var(--muted);
+      font-size: 16.5px;
+      max-width: 680px;
+    }
+
+    /* Pace section + Interactive Pace Calculator */
+    .pace-layout {
+      display: grid;
+      grid-template-columns: 1fr 1.05fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+    .pace-tiers {
+      display: grid;
+      gap: 12px;
+    }
+    .pace-tier {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 16px;
+      align-items: center;
+      padding: 18px 20px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .pace-chip {
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      text-align: center;
+      padding: 8px 10px;
+      border-radius: 9px;
+      background: var(--badge);
+    }
+    .pace-tier h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 700; }
+    .pace-tier p { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+
+    .pace-calc {
+      padding: 24px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .pace-calc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .calc-preview {
+      padding: 18px;
+      background: #14131a;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      font-family: var(--mono);
+    }
+    .calc-preview-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .calc-preview-top .lbl { font-size: 16px; font-weight: 700; flex: 1; }
+    .calc-preview-top .val { font-size: 18px; font-weight: 700; }
+    .calc-preview-top .pill {
+      padding: 3px 9px;
+      border-radius: 6px;
+      background: var(--badge);
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .calc-track {
+      height: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: repeating-linear-gradient(135deg, transparent 0 6px, var(--track-tex) 6px 8px), var(--track);
+    }
+    .calc-fill { height: 100%; border-radius: inherit; transition: width 80ms linear, background 160ms; }
+    .calc-verdict {
+      margin-top: 12px;
+      font-family: var(--sans);
+      font-size: 14px;
+      color: #cbc5dc;
+    }
+    .sliders { display: grid; gap: 14px; }
+    .slider-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13.5px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .slider-row label b { color: var(--ink); font-family: var(--mono); }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Providers grid */
+    .providers-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .provider-card {
+      padding: 24px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .provider-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .provider-name {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    .provider-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #252233;
+      border: 1px solid #35304a;
+      color: var(--muted);
+    }
+    .provider-card p { margin: 0; font-size: 14.5px; color: var(--muted); }
+    .provider-meta {
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--dim);
+      line-height: 1.65;
+    }
+    .provider-meta strong { color: #c7c0d8; font-weight: 600; }
+
+    /* Desktop showcase */
+    .strip-frame {
+      padding: 22px 22px 26px;
+      background: linear-gradient(180deg, #161421 0%, #111019 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    .strip-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+      font-size: 13.5px;
+      color: var(--muted);
+    }
+    .strip-meta strong { color: var(--ink); }
+    .strip-shot-wrap {
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #2b2738;
+      background: #0b0a10;
+      padding: 0 12px 28px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .strip-shot-wrap img {
+      margin: 0 auto;
+      border-radius: 0 0 10px 10px;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+    }
+
+    .desktop-grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+    .panel-frame {
+      padding: 18px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+    .panel-frame img {
+      border-radius: 12px;
+      box-shadow: 0 18px 36px rgba(0,0,0,0.45);
+    }
+    .feature-list {
+      display: grid;
+      gap: 14px;
+    }
+    .feature-item {
+      padding: 16px 18px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+    }
+    .feature-item h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 700; }
+    .feature-item p { margin: 0; font-size: 14.5px; color: var(--muted); }
+
+    /* Hardware section */
+    .hw-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 32px;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+    .photo-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 12px;
+      overflow: hidden;
+    }
+    .photo-card img {
+      width: 100%;
+      border-radius: 12px;
+    }
+    .photo-caption {
+      padding: 10px 6px 2px;
+      font-size: 12.5px;
+      color: var(--dim);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .step-card {
+      padding: 16px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+    }
+    .step-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ok);
+      margin-bottom: 6px;
+    }
+    .step-card h4 { margin: 0 0 5px; font-size: 14px; font-weight: 700; }
+    .step-card p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.48; }
+
+    /* Architecture & Privacy */
+    .arch-box {
+      padding: 26px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      margin-bottom: 24px;
+      overflow-x: auto;
+    }
+    .arch-box svg {
+      width: 100%;
+      min-width: 720px;
+      height: auto;
+      display: block;
+    }
+    .notes-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .note-card {
+      padding: 22px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+    }
+    .note-card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+    .note-card p, .note-card li { font-size: 14.5px; color: var(--muted); }
+    .note-card ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+    .note-card a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+    .code-block {
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: #121119;
+      border: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.65;
+      color: #d6d0e6;
+      overflow-x: auto;
+      scrollbar-color: #3a344c transparent;
+    }
+
+    /* Final CTA */
+    .cta-panel {
+      padding: 40px 32px;
+      background: linear-gradient(135deg, #1c192a 0%, #15141e 100%);
+      border: 1px solid var(--line-hi);
+      border-radius: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .cta-panel h2 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.025em; }
+    .cta-panel p { margin: 0; color: var(--muted); font-size: 15px; }
+
+    footer {
+      padding: 36px 0 48px;
+      border-top: 1px solid var(--line);
+      font-size: 13.5px;
+      color: var(--dim);
+    }
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+    .footer-links a:hover { color: var(--ink); }
+
+    @media (max-width: 980px) {
+      .hero-grid, .pace-layout, .hw-grid, .desktop-grid { grid-template-columns: 1fr; }
+      .providers-grid { grid-template-columns: 1fr; }
+      .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .notes-grid { grid-template-columns: 1fr; }
+      .nav-links { display: none; }
+      .nav-actions { margin-left: auto; }
+      .hw-usbc { display: none; }
+    }
+    @media (max-width: 540px) {
+      .nav-inner { padding: 10px 14px; gap: 8px; }
+      .ver-pill, #starCount { display: none; }
+      .nav-actions { gap: 6px; }
+      .nav-actions .btn-sm { padding: 6px 10px; font-size: 12.5px; }
+      .container { padding: 0 16px; }
+      .eyebrow { font-size: 10.5px; padding: 5px 10px; gap: 7px; }
+      .steps-grid { grid-template-columns: 1fr; }
+      .hero { padding-top: 28px; }
+      section.block { padding: 56px 0; }
+      .cta-panel { padding: 26px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-bar-accent" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <nav class="nav" aria-label="Primary">
+    <div class="nav-inner">
+      <a class="brand" href="#">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x=".5" y=".5" width="23" height="23" rx="6" fill="#1e1c27" stroke="#2f2c3b"/>
+          <rect x="5" y="5" width="14" height="3" rx="1.5" fill="#262332"/>
+          <rect x="5" y="5" width="10" height="3" rx="1.5" fill="#39d98a"/>
+          <rect x="5" y="10.5" width="14" height="3" rx="1.5" fill="#262332"/>
+          <rect x="5" y="10.5" width="7" height="3" rx="1.5" fill="#ffca3b"/>
+          <rect x="5" y="16" width="14" height="3" rx="1.5" fill="#262332"/>
+          <rect x="5" y="16" width="12" height="3" rx="1.5" fill="#ff5b5b"/>
+        </svg>
+        <span>CC Meter</span>
+        <span class="ver-pill" id="navVersion">v1.1.21</span>
+      </a>
+      <div class="nav-links">
+        <a href="#pace">Burn Pace</a>
+        <a href="#providers">Providers</a>
+        <a href="#desktop">Desktop</a>
+        <a href="#hardware">ESP32 Display</a>
+        <a href="#architecture">Privacy &amp; Source</a>
+      </div>
+      <div class="nav-actions">
+        <a class="btn btn-sm" href="https://github.com/silverdolphin863/claude-code-meter" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.04c-3.34.73-4.04-1.61-4.04-1.61a3.18 3.18 0 0 0-1.34-1.76c-1.09-.75.08-.73.08-.73a2.52 2.52 0 0 1 1.84 1.24 2.55 2.55 0 0 0 3.49 1 2.55 2.55 0 0 1 .76-1.6c-2.66-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 0 1 1.24-3.22 4.3 4.3 0 0 1 .12-3.18s1.01-.32 3.3 1.23a11.38 11.38 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23a4.3 4.3 0 0 1 .12 3.18 4.64 4.64 0 0 1 1.24 3.22c0 4.61-2.81 5.63-5.49 5.92a2.85 2.85 0 0 1 .81 2.22v3.29c0 .32.22.7.82.58A12 12 0 0 0 12 .5Z"/></svg>
+          <span>GitHub</span>
+          <span id="starCount" style="color:var(--muted);font-family:var(--mono);font-size:12px"></span>
+        </a>
+        <a class="btn btn-primary btn-sm" id="navDownload" href="https://github.com/silverdolphin863/claude-code-meter/releases/download/v1.1.21/CCMeter-Setup-1.1.21.exe">Download</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="container hero-grid">
+      <div>
+        <div class="eyebrow">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span id="heroBadge">WINDOWS · ESP32-4848S040 · LOCAL-ONLY · MIT</span>
+        </div>
+        <h1>Know when your AI quota will run out.</h1>
+        <p class="hero-lead">
+          Live <strong>Claude Code</strong>, <strong>Codex</strong>, and <strong>Gemini (Antigravity)</strong> rate limits, reset countdowns, and burn pace — in a minimal Windows tray strip and an optional <strong>~$25 USB desk touch display</strong>.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary btn-lg" id="heroInstaller" href="https://github.com/silverdolphin863/claude-code-meter/releases/download/v1.1.21/CCMeter-Setup-1.1.21.exe">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 19h16"/></svg>
+            <span id="heroInstallerLabel">Download Windows Installer</span>
+          </a>
+          <a class="btn btn-lg" id="heroFirmware" href="https://github.com/silverdolphin863/claude-code-meter/releases/download/v1.1.21/CCMeter-LCD-Firmware-1.1.5.zip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3m6-3v3M9 20v3m6-3v3M20 9h3m-3 6h3M1 9h3m-3 6h3"/></svg>
+            <span id="heroFirmwareLabel">ESP32 Firmware 1.1.5</span>
+          </a>
+        </div>
+        <div class="hero-facts">
+          <span><i></i>0 hosted servers</span>
+          <span><i></i>0 credentials on ESP32</span>
+          <span><i></i>Single USB-C cable</span>
+          <span><i></i>Built-in Focus Timer</span>
+        </div>
+      </div>
+
+      <div class="sim-column" id="preview">
+        <div class="sim-tabs" role="tablist" aria-label="Interactive panel screen">
+          <button class="sim-tab active" data-sim-tab="meter" role="tab" aria-selected="true">Usage Meter</button>
+          <button class="sim-tab" data-sim-tab="focus" role="tab" aria-selected="false">Focus Timer</button>
+          <button class="sim-tab" data-sim-tab="setup" role="tab" aria-selected="false">Wi-Fi Setup</button>
+        </div>
+
+        <div class="hw-bezel">
+          <div class="hw-usbc" aria-hidden="true"></div>
+          <div class="lcd-viewport" id="lcdViewport">
+            <div class="lcd-stage" id="lcdStage">
+              <div class="lcd-dots" aria-label="Panel pages">
+                <button id="simDot0" class="on" aria-label="Meter page"></button>
+                <button id="simDot1" aria-label="Focus timer page"></button>
+              </div>
+              <div class="lcd-pages" id="lcdPages">
+                <!-- Page 0: Live Meter -->
+                <div class="lcd-page" id="meterPage" data-view="meter">
+                  <div class="lcd-header">
+                    <span class="lcd-brand">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x=".5" y=".5" width="23" height="23" rx="6" fill="#1e1c27" stroke="#2f2c3b"/>
+                        <rect x="5" y="5" width="14" height="3" rx="1.5" fill="#262332"/>
+                        <rect x="5" y="5" width="10" height="3" rx="1.5" fill="#39d98a"/>
+                        <rect x="5" y="10.5" width="14" height="3" rx="1.5" fill="#262332"/>
+                        <rect x="5" y="10.5" width="7" height="3" rx="1.5" fill="#ffca3b"/>
+                        <rect x="5" y="16" width="14" height="3" rx="1.5" fill="#262332"/>
+                        <rect x="5" y="16" width="12" height="3" rx="1.5" fill="#ff5b5b"/>
+                      </svg>
+                      <strong>CC Meter</strong>
+                    </span>
+                    <span class="lcd-conn" id="simConn" data-tone="ok">
+                      <span class="lcd-age" id="simAge">2m</span>
+                      <span class="lcd-dot"></span>
+                      <span class="lcd-status" id="simStatus">USB</span>
+                    </span>
+                    <button class="lcd-icon-btn" id="simRefreshBtn" title="Test touch refresh" aria-label="Refresh">
+                      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg>
+                    </button>
+                    <button class="lcd-icon-btn" id="simGearBtn" title="Toggle optional Wi-Fi setup" aria-label="Settings">
+                      <svg viewBox="0 0 24 24"><path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4A2 2 0 0 0 4 9.9l.2.1a2 2 0 0 1 1 1.7v.6a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.6a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
+
+                  <div class="lcd-main">
+                    <div class="lcd-card claude">
+                      <div class="lcd-provider">Claude Code</div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">5-hour</span><span class="lcd-pct">33%</span><span class="lcd-pace">0.5x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill" style="width:33%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">2h 53m</span><span class="lcd-target">TODAY 17:30</span>
+                        </div>
+                      </div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">Weekly</span><span class="lcd-pct">36%</span><span class="lcd-pace">0.6x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill" style="width:36%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">3d 2h</span><span class="lcd-target">MON 17:00</span>
+                        </div>
+                      </div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">Weekly, Fable</span><span class="lcd-pct warn">53%</span><span class="lcd-pace warn">0.9x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill warn" style="width:53%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">3d 2h</span><span class="lcd-target">MON 17:00</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="lcd-card codex">
+                      <div class="lcd-provider">Codex</div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">Weekly</span><span class="lcd-pct">32%</span><span class="lcd-pace warn">1.1x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill" style="width:32%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">4d 20h</span><span class="lcd-target">WED 13:18</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="lcd-card gemini">
+                      <div class="lcd-provider">Gemini</div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">5-hour</span><span class="lcd-pct">24%</span><span class="lcd-pace">0.4x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill" style="width:24%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">1h 56m</span><span class="lcd-target">TODAY 15:44</span>
+                        </div>
+                      </div>
+                      <div class="lcd-row">
+                        <div class="lcd-head"><span class="lcd-label">Weekly</span><span class="lcd-pct">6%</span><span class="lcd-pace">0.6x</span></div>
+                        <div class="lcd-track"><div class="lcd-fill" style="width:6%"></div></div>
+                        <div class="lcd-reset">
+                          <svg class="lcd-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.6"/></svg>
+                          <span class="lcd-countdown">6d 5h</span><span class="lcd-target">THU 18:48</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="lcd-setup">
+                    <div class="lcd-setup-card">
+                      <div style="font-size:18px;font-weight:700;margin-bottom:26px">OPTIONAL WI-FI SETUP</div>
+                      <div style="font-size:11px;color:#8b85a0">Join the local setup Wi-Fi:</div>
+                      <div style="font-size:18px;font-weight:700;color:var(--accent);margin:5px 0 22px">CCMeter-Setup-72E0</div>
+                      <div style="font-size:11px;color:#8b85a0">Open this address in a browser:</div>
+                      <div style="font-size:18px;font-weight:700;color:var(--accent);margin:5px 0 22px">192.168.4.1</div>
+                      <div style="font-size:11px;line-height:1.5;color:#f4f2f9">Save Wi-Fi, panel URL, and token<br>in the private setup form.</div>
+                      <div style="font-size:11px;color:#8b85a0;margin-top:26px">Press CFG again to return to USB.</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Page 1: Interactive Focus Timer -->
+                <div class="lcd-page" id="focusPage">
+                  <div class="fp-head">
+                    <button class="fp-mode" id="fpModeBtn" title="Tap FOCUS to cycle ring colour">FOCUS<i id="fpModeSub">1 of 4</i></button>
+                    <div class="fp-cycle" id="fpCycle"><span class="now"></span><span></span><span></span><span></span></div>
+                  </div>
+                  <div class="fp-ring paused" id="fpRing">
+                    <svg viewBox="0 0 300 300" aria-hidden="true">
+                      <circle class="track" cx="150" cy="150" r="136" fill="none" stroke-width="16"/>
+                      <circle class="arc" id="fpArc" cx="150" cy="150" r="136" fill="none" stroke-width="16"/>
+                    </svg>
+                    <div class="fp-time"><span id="fpClock">25:00</span><small id="fpState">TAP TO START</small></div>
+                  </div>
+                  <div class="fp-controls">
+                    <button class="fp-btn" id="fpReset" aria-label="Reset timer"><svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+                    <button class="fp-btn main" id="fpMain" aria-label="Start or pause timer"><svg viewBox="0 0 24 24" id="fpMainIcon"><path d="M8 5v14l11-7z"/></svg></button>
+                    <button class="fp-btn" id="fpSkip" aria-label="Skip phase"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zm9-12v12h2V6h-2z"/></svg></button>
+                  </div>
+                  <div class="fp-today"><span>Today <b id="fpTodayTotal">2h 35m</b> active</span><span><b id="fpTodayBlocks">6</b> focus blocks</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sim-caption">
+          <span id="simHint">Interactive 480×480 preview — tap refresh, settings, or swipe left for Focus Timer.</span>
+          <span class="sim-speed" id="simSpeedWrap" style="display:none">
+            <span>Speed</span>
+            <button id="speed1" class="on">1x</button>
+            <button id="speed30">30x</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="block" id="pace">
+    <div class="container">
+      <div class="section-eyebrow">Burn Pace</div>
+      <h2 class="section-title">Not a cost tracker. One question mid-session.</h2>
+      <p class="section-sub">
+        Dollar totals do not tell you when a 5-hour or 7-day subscription window is about to slam shut. CC Meter computes <code>pace = % used ÷ % elapsed</code> for every window so you know instantly if you are coasting or heading into a wall.
+      </p>
+
+      <div class="pace-layout">
+        <div class="pace-tiers">
+          <div class="pace-tier">
+            <div class="pace-chip" style="color:var(--ok)">0.4x</div>
+            <div>
+              <h3>Coasting</h3>
+              <p>You are burning quota well below the clock rate and will finish the window with generous headroom.</p>
+            </div>
+          </div>
+          <div class="pace-tier">
+            <div class="pace-chip" style="color:var(--warn)">1.0x</div>
+            <div>
+              <h3>Right on the clock</h3>
+              <p>At your current rate, you will hit 100% right as the window resets. Steady pace, zero waste.</p>
+            </div>
+          </div>
+          <div class="pace-tier">
+            <div class="pace-chip" style="color:var(--hot)">1.6x</div>
+            <div>
+              <h3>Hitting the wall early</h3>
+              <p>You are burning 60% faster than time is passing — time to shift heavier work to another pool before throttling.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pace-calc">
+          <div class="pace-calc-head">
+            <span>Interactive Pace Calculator</span>
+            <span>5-Hour Window</span>
+          </div>
+          <div class="calc-preview">
+            <div class="calc-preview-top">
+              <span class="lbl">5-hour</span>
+              <span class="val" id="calcPct" style="color:var(--warn)">54%</span>
+              <span class="pill" id="calcPace" style="color:var(--orange)">1.4x</span>
+            </div>
+            <div class="calc-track">
+              <div class="calc-fill" id="calcBar" style="width:54%;background:var(--warn)"></div>
+            </div>
+            <div class="calc-verdict" id="calcVerdict">At 1.4x pace, you will hit 100% about 1h 23m before the window resets.</div>
+          </div>
+          <div class="sliders">
+            <div class="slider-row">
+              <label for="usedSlider"><span>Quota burned so far</span><b id="usedOut">54%</b></label>
+              <input id="usedSlider" type="range" min="1" max="100" value="54">
+            </div>
+            <div class="slider-row">
+              <label for="elapsedSlider"><span>Window elapsed (of 5h)</span><b id="elapsedOut">40% (2h 00m)</b></label>
+              <input id="elapsedSlider" type="range" min="5" max="100" value="40">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="providers">
+    <div class="container">
+      <div class="section-eyebrow">Three Providers</div>
+      <h2 class="section-title">One local gauge for every subscription you burn.</h2>
+      <p class="section-sub">
+        Every provider is auto-detected from your machine. Tools you do not use stay hidden automatically — override any meter in Settings or the tray menu.
+      </p>
+
+      <div class="providers-grid">
+        <article class="provider-card">
+          <div class="provider-top">
+            <span class="provider-name">Claude Code</span>
+            <span class="provider-tag">5h · Weekly · Model</span>
+          </div>
+          <p>Tracks your 5-hour session window, weekly all-models pool, and per-model weekly caps (Opus, Fable, or whichever your plan scopes).</p>
+          <div class="provider-meta">
+            <strong>Source:</strong> Direct OAuth call using local <code>~/.claude/.credentials.json</code> + shared <code>usage-cache.json</code>.<br>
+            <strong>Safety:</strong> Automatic token renewal, strict 15-min cadence, shared persisted 429 backoff.
+          </div>
+        </article>
+
+        <article class="provider-card">
+          <div class="provider-top">
+            <span class="provider-name">Codex</span>
+            <span class="provider-tag">Account-Wide Live</span>
+          </div>
+          <p>Reports the exact account-wide windows your Codex subscription currently exposes without inventing missing windows from stale logs.</p>
+          <div class="provider-meta">
+            <strong>Source:</strong> Local <code>codex app-server</code> RPC (<code>account/rateLimits/read</code>), 5-min cache.<br>
+            <strong>Safety:</strong> CC Meter never touches your OpenAI tokens; Codex CLI handles its own auth.
+          </div>
+        </article>
+
+        <article class="provider-card">
+          <div class="provider-top">
+            <span class="provider-name">Gemini</span>
+            <span class="provider-tag">5h · Weekly</span>
+          </div>
+          <p>Reads live Gemini 4 model quota pools directly from your Antigravity account, converting remaining quota to percent used with pace and countdowns.</p>
+          <div class="provider-meta">
+            <strong>Source:</strong> Official <code>agy -p "/usage" --output-format json</code>, 5-min cache (optional cache file fallback).<br>
+            <strong>Safety:</strong> Spends 0 tokens, creates 0 conversations, never reads Google credentials.
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="desktop">
+    <div class="container">
+      <div class="section-eyebrow">Windows Desktop Widget</div>
+      <h2 class="section-title">A 29 px top-edge strip or a full countdown panel.</h2>
+      <p class="section-sub">
+        Lives in the system tray, never clutters the taskbar, and never steals focus when you toggle it.
+      </p>
+
+      <div class="strip-frame">
+        <div class="strip-meta">
+          <span><strong>Compact strip mode</strong> — docks cleanly against the top screen edge</span>
+          <span>Optional auto-hide · Hover top edge to slide in · Drag edges to resize</span>
+        </div>
+        <div class="strip-shot-wrap">
+          <img src="strip.png" alt="CC Meter compact strip showing Claude, Codex, and Gemini meters">
+        </div>
+      </div>
+
+      <div class="desktop-grid">
+        <div class="panel-frame">
+          <img src="panel.png" alt="CC Meter full desktop panel showing Claude Code, Codex, and Gemini cards">
+        </div>
+        <div class="feature-list">
+          <div class="feature-item">
+            <h3>Auto-hiding screen-edge wedge</h3>
+            <p>Flip the <code>AUTO</code> switch to slide the strip up to a 3 px peek along the top edge. Touch the edge with your cursor and it glides right back down.</p>
+          </div>
+          <div class="feature-item">
+            <h3>Tray tooltip &amp; display-only mode</h3>
+            <p>Hover the tray icon for an instant summary across all active providers. If you use the ESP32 desk screen, hide the desktop widget completely while the tray keeps feeding USB.</p>
+          </div>
+          <div class="feature-item">
+            <h3>Per-user Start with Windows</h3>
+            <p>Off by default. Writes one per-user <code>HKCU\...\Run</code> key — no admin privileges, no background service, and stays in sync with Task Manager's Startup tab.</p>
+          </div>
+          <div class="feature-item">
+            <h3>Zero surprise updates</h3>
+            <p>Updates are checked only when you click <strong>Check for updates...</strong> in the tray menu. Nothing phones home on startup, on focus, or on a timer.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="hardware">
+    <div class="container">
+      <div class="section-eyebrow">ESP32-4848S040 Hardware Display</div>
+      <h2 class="section-title">Put your rate limits on a ~$25 4-inch touch screen.</h2>
+      <p class="section-sub">
+        Dedicated open-source firmware for the widely available JCZN / Guition <code>ESP32-4848S040</code> (480×480 RGB IPS + GT911 capacitive touch). Plug in one USB-C cable and leave your browser tabs closed.
+      </p>
+
+      <div class="hw-grid">
+        <div class="photo-card">
+          <img src="lcd-hardware.png" alt="Physical ESP32-4848S040 480x480 display running CC Meter over USB">
+          <div class="photo-caption">
+            <span>Physical Guition ESP32-4848S040 running CC Meter over USB-C</span>
+            <span>Test unit cost CHF 21.39 shipped</span>
+          </div>
+        </div>
+
+        <div class="feature-list">
+          <div class="feature-item">
+            <h3>One USB cable does everything</h3>
+            <p>Power, live JSON updates over the onboard CH340 UART, touch-triggered refreshes, and PC focus-timer audio all share one cable. No Wi-Fi setup needed (optional token-protected LAN mode is built in).</p>
+          </div>
+          <div class="feature-item">
+            <h3>Flicker-free PSRAM double buffering</h3>
+            <p>Full 480×480 off-screen canvas with cache-aligned partial row flushes on minute updates and targeted arc-end patches on the focus ring — zero scan-out flicker or sideways jump.</p>
+          </div>
+          <div class="feature-item">
+            <h3>Swipe left for a Pomodoro Focus Timer</h3>
+            <p>25/5 focus blocks with NVS persistence, 6 tap-to-cycle ring colors, PC WebAudio cues, and optional HTTPS webhook logging to <code>focus-webhook.json</code> for every finished block.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">01</div>
+          <h4>Install CC Meter</h4>
+          <p>Run the matching Windows installer. It carries the USB bridge and never touches your board on its own.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">02</div>
+          <h4>Grab Firmware ZIP</h4>
+          <p>Download and extract <code>CCMeter-LCD-Firmware-1.1.5.zip</code> from GitHub Releases.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">03</div>
+          <h4>Connect via USB</h4>
+          <p>Plug the square <code>ESP32-4848S040</code> directly into your PC. CH340 COM port is detected automatically.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">04</div>
+          <h4>Backup &amp; Flash</h4>
+          <p>Follow the included offline <code>SETUP.html</code>. The script saves a verified 16 MB factory backup before flashing.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">05</div>
+          <h4>Enable Display</h4>
+          <p>Open <strong>Settings → Hardware display → USB</strong> in CC Meter. Live meters appear within seconds.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="architecture">
+    <div class="container">
+      <div class="section-eyebrow">Architecture &amp; Transparency</div>
+      <h2 class="section-title">No cloud backend. No telemetry. Read every line.</h2>
+      <p class="section-sub">
+        Everything stays on your machine. Provider credentials never leave the standard CLI tools or Anthropic's OAuth endpoint, and never touch the ESP32.
+      </p>
+
+      <div class="arch-box" aria-label="CC Meter local data flow diagram">
+        <svg viewBox="0 0 980 210" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="#7c7399"/>
+            </marker>
+          </defs>
+          <!-- Column 1: Local Sources -->
+          <rect x="12" y="14" width="235" height="52" rx="11" fill="#14131a" stroke="#39d98a" stroke-opacity="0.55"/>
+          <text x="28" y="37" fill="#f4f2f9" font-family="Cascadia Mono, JetBrains Mono, monospace" font-size="13" font-weight="700">Claude Code OAuth</text>
+          <text x="28" y="54" fill="#8b85a0" font-family="Inter, Segoe UI, sans-serif" font-size="11.5">~/.claude/usage-cache.json · 15m TTL</text>
+
+          <rect x="12" y="79" width="235" height="52" rx="11" fill="#14131a" stroke="#ffca3b" stroke-opacity="0.55"/>
+          <text x="28" y="102" fill="#f4f2f9" font-family="Cascadia Mono, JetBrains Mono, monospace" font-size="13" font-weight="700">Codex CLI app-server</text>
+          <text x="28" y="119" fill="#8b85a0" font-family="Inter, Segoe UI, sans-serif" font-size="11.5">account/rateLimits/read · 5m cache</text>
+
+          <rect x="12" y="144" width="235" height="52" rx="11" fill="#14131a" stroke="#a78bfa" stroke-opacity="0.6"/>
+          <text x="28" y="167" fill="#f4f2f9" font-family="Cascadia Mono, JetBrains Mono, monospace" font-size="13" font-weight="700">Antigravity CLI (agy)</text>
+          <text x="28" y="184" fill="#8b85a0" font-family="Inter, Segoe UI, sans-serif" font-size="11.5">agy -p "/usage" · 0 tokens · 5m cache</text>
+
+          <!-- Arrows to CC Meter -->
+          <path d="M 248 40 C 292 40, 290 105, 336 105" stroke="#7c7399" stroke-width="1.8" marker-end="url(#arr)"/>
+          <path d="M 248 105 L 336 105" stroke="#7c7399" stroke-width="1.8" marker-end="url(#arr)"/>
+          <path d="M 248 170 C 292 170, 290 105, 336 105" stroke="#7c7399" stroke-width="1.8" marker-end="url(#arr)"/>
+
+          <!-- Column 2: CC Meter Core -->
+          <rect x="342" y="48" width="268" height="114" rx="14" fill="#211e2d" stroke="#534a70" stroke-width="1.5"/>
+          <text x="364" y="80" fill="#f4f2f9" font-family="Inter, Segoe UI, sans-serif" font-size="16" font-weight="700">CC Meter Local Host</text>
+          <text x="364" y="102" fill="#a78bfa" font-family="Cascadia Mono, JetBrains Mono, monospace" font-size="12.5">http://127.0.0.1:7373/usage.json</text>
+          <text x="364" y="124" fill="#9d96b3" font-family="Inter, Segoe UI, sans-serif" font-size="12">Loopback-only HTTP · No CORS</text>
+          <text x="364" y="143" fill="#9d96b3" font-family="Inter, Segoe UI, sans-serif" font-size="12">Strips all tokens before serving</text>
+
+          <!-- Arrows to outputs -->
+          <path d="M 610 84 C 655 84, 655 56, 704 56" stroke="#7c7399" stroke-width="1.8" marker-end="url(#arr)"/>
+          <path d="M 610 126 C 655 126, 655 154, 704 154" stroke="#7c7399" stroke-width="1.8" marker-end="url(#arr)"/>
+
+          <!-- Column 3: Outputs -->
+          <rect x="710" y="22" width="256" height="68" rx="12" fill="#14131a" stroke="#3c374f"/>
+          <text x="728" y="49" fill="#f4f2f9" font-family="Inter, Segoe UI, sans-serif" font-size="14.5" font-weight="700">Windows Tray &amp; Strip</text>
+          <text x="728" y="70" fill="#8b85a0" font-family="Inter, Segoe UI, sans-serif" font-size="12">Compact top-edge bar + Full panel</text>
+
+          <rect x="710" y="120" width="256" height="68" rx="12" fill="#14131a" stroke="#39d98a" stroke-opacity="0.5"/>
+          <text x="728" y="147" fill="#f4f2f9" font-family="Inter, Segoe UI, sans-serif" font-size="14.5" font-weight="700">ESP32-4848S040 (USB)</text>
+          <text x="728" y="168" fill="#8b85a0" font-family="Inter, Segoe UI, sans-serif" font-size="12">115200 baud JSON · Display-only, 0 keys</text>
+        </svg>
+      </div>
+
+      <div class="notes-grid">
+        <div class="note-card">
+          <h3>Unsigned installer &amp; build from source</h3>
+          <p>The Windows installer is unsigned, so SmartScreen will show <em>"Windows protected your PC"</em> (click <strong>More info → Run anyway</strong>). Prefer not to trust a binary? Build it yourself in three commands (Node 20+):</p>
+          <pre class="code-block">git clone https://github.com/silverdolphin863/claude-code-meter.git
+cd claude-code-meter
+npm install &amp;&amp; npm test &amp;&amp; npm run dist</pre>
+        </div>
+
+        <div class="note-card">
+          <h3>Honest scope &amp; related projects</h3>
+          <p>CC Meter is Windows-only for now and focuses on a low-cost square Guition panel driven over one USB cable alongside a desktop tray gauge. Great related projects worth checking out:</p>
+          <ul>
+            <li><a href="https://tokenmonitor.dev/" target="_blank" rel="noopener">TokenMonitor</a> — polished 4-inch 480×480 Wi-Fi desk display for Claude, Codex &amp; Antigravity.</li>
+            <li><a href="https://github.com/HermannBjorgvin/Clawdmeter" target="_blank" rel="noopener">Clawdmeter</a> — cross-platform (Win/macOS/Linux) Bluetooth ESP32 Claude Code meter.</li>
+            <li><a href="https://github.com/alestanalves/TokenMeter" target="_blank" rel="noopener">TokenMeter</a> — Windows USB bridge + 2.8-inch ESP32 touch display.</li>
+            <li><a href="https://encinitas3d.com/product/codemeter-a-desk-display-for-your-claude-code-usage/" target="_blank" rel="noopener">codeMeter</a> — pre-built standalone Wi-Fi hardware display.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="install">
+    <div class="container">
+      <div class="cta-panel">
+        <div>
+          <h2>Ready to keep an eye on your burn pace?</h2>
+          <p>Free, local-only, MIT licensed. Works standalone on Windows — add the ESP32 panel whenever you like.</p>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px">
+          <a class="btn btn-primary btn-lg" id="ctaInstaller" href="https://github.com/silverdolphin863/claude-code-meter/releases/download/v1.1.21/CCMeter-Setup-1.1.21.exe">Download for Windows</a>
+          <a class="btn btn-lg" href="https://github.com/silverdolphin863/claude-code-meter/releases" target="_blank" rel="noopener">All Releases</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container footer-inner">
+      <div>MIT License · Not affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google.</div>
+      <div class="footer-links">
+        <a href="https://github.com/silverdolphin863/claude-code-meter" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/silverdolphin863/claude-code-meter/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/silverdolphin863/claude-code-meter/blob/main/firmware/esp32-4848s040/README.md" target="_blank" rel="noopener">ESP32 Firmware Docs</a>
+        <a href="https://github.com/silverdolphin863/claude-code-meter/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+
+      // 1. Scale the 480x480 interactive LCD stage crisply to its viewport
+      const viewport = $('lcdViewport');
+      const stage = $('lcdStage');
+      function fitLcd() {
+        const scale = viewport.clientWidth / 480;
+        stage.style.transform = `scale(${scale})`;
+      }
+      fitLcd();
+      window.addEventListener('resize', fitLcd);
+
+      // 2. Interactive LCD page switcher + swipe + header controls
+      const pagesEl = $('lcdPages');
+      const meterPage = $('meterPage');
+      const simConn = $('simConn');
+      const simAge = $('simAge');
+      const simStatus = $('simStatus');
+      const simRefreshBtn = $('simRefreshBtn');
+      const simGearBtn = $('simGearBtn');
+      const simHint = $('simHint');
+      const simSpeedWrap = $('simSpeedWrap');
+      const tabs = [...document.querySelectorAll('[data-sim-tab]')];
+      let currentPage = 0;
+      let setupOpen = false;
+      let refreshTimer = null;
+      let okTimer = null;
+
+      function syncSimUi() {
+        pagesEl.style.transform = `translateX(${currentPage ? -480 : 0}px)`;
+        $('simDot0').classList.toggle('on', currentPage === 0);
+        $('simDot1').classList.toggle('on', currentPage === 1);
+        meterPage.dataset.view = setupOpen ? 'setup' : 'meter';
+        simGearBtn.classList.toggle('active', setupOpen);
+        if (setupOpen) {
+          simConn.dataset.tone = 'warn';
+          simStatus.textContent = 'CFG';
+        } else if (simStatus.textContent === 'CFG') {
+          simConn.dataset.tone = 'ok';
+          simStatus.textContent = 'USB';
+        }
+        const activeTab = currentPage === 1 ? 'focus' : (setupOpen ? 'setup' : 'meter');
+        tabs.forEach((btn) => {
+          const on = btn.dataset.simTab === activeTab;
+          btn.classList.toggle('active', on);
+          btn.setAttribute('aria-selected', String(on));
+        });
+        simSpeedWrap.style.display = currentPage === 1 ? 'inline-flex' : 'none';
+        simHint.textContent = currentPage === 1
+          ? 'Tap the ring to start/pause, or tap FOCUS to cycle all 6 ring colours.'
+          : setupOpen
+            ? 'Optional local Wi-Fi AP fallback — USB works plug-and-play without this.'
+            : 'Interactive 480×480 preview — tap refresh, settings, or swipe left for Focus Timer.';
+      }
+
+      tabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const t = btn.dataset.simTab;
+          if (t === 'focus') { currentPage = 1; setupOpen = false; }
+          else if (t === 'setup') { currentPage = 0; setupOpen = true; }
+          else { currentPage = 0; setupOpen = false; }
+          syncSimUi();
+        });
+      });
+      $('simDot0').addEventListener('click', () => { currentPage = 0; syncSimUi(); });
+      $('simDot1').addEventListener('click', () => { currentPage = 1; setupOpen = false; syncSimUi(); });
+
+      simGearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setupOpen = !setupOpen;
+        syncSimUi();
+      });
+
+      simRefreshBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearTimeout(refreshTimer);
+        clearTimeout(okTimer);
+        simRefreshBtn.classList.remove('spinning');
+        void simRefreshBtn.offsetWidth;
+        simRefreshBtn.classList.add('spinning');
+        refreshTimer = setTimeout(() => {
+          simRefreshBtn.classList.remove('spinning');
+          if (setupOpen) return;
+          simAge.textContent = '<1m';
+          simConn.dataset.tone = 'ok';
+          simStatus.textContent = 'OK';
+          okTimer = setTimeout(() => {
+            if (!setupOpen) simStatus.textContent = 'USB';
+          }, 2600);
+        }, 1100);
+      });
+
+      // Swipe gesture on LCD
+      let swipeX = null, swipeY = null;
+      viewport.addEventListener('pointerdown', (e) => { swipeX = e.clientX; swipeY = e.clientY; });
+      viewport.addEventListener('pointerup', (e) => {
+        if (swipeX === null) return;
+        const dx = e.clientX - swipeX, dy = e.clientY - swipeY;
+        swipeX = null;
+        if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+          currentPage = dx < 0 ? 1 : 0;
+          if (currentPage === 1) setupOpen = false;
+          syncSimUi();
+        }
+      });
+
+      // 3. Interactive Focus Timer (matches firmware 1.1.4/1.1.5: 25m focus / 5m short break + 6 ring accents)
+      const ACCENTS = ['#ff7a59', '#ffb02e', '#60a5fa', '#a78bfa', '#f472b6', '#2dd4bf'];
+      let accentIdx = 0;
+      const FOCUS_SEC = 25 * 60;
+      const BREAK_SEC = 5 * 60;
+      const R = 136, C = 2 * Math.PI * R;
+      const fpArc = $('fpArc');
+      fpArc.style.strokeDasharray = C;
+
+      let phase = 'focus', block = 0, total = FOCUS_SEC, left = FOCUS_SEC, running = false;
+      let todaySec = 2 * 3600 + 35 * 60, todayBlocks = 6, speed = 1, lastTs = 0;
+
+      let audioCtx;
+      function beep(freq, dur, type = 'sine', gain = 0.08, delay = 0) {
+        try {
+          audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+          const t = audioCtx.currentTime + delay;
+          const osc = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          osc.type = type;
+          osc.frequency.value = freq;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          osc.connect(g).connect(audioCtx.destination);
+          osc.start(t);
+          osc.stop(t + dur + 0.02);
+        } catch { /* audio optional */ }
+      }
+
+      function fmtClock(s) {
+        s = Math.max(0, Math.ceil(s));
+        return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      }
+      function fmtTotal(s) {
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h ? `${h}h ${m}m` : `${m}m`;
+      }
+      function renderFocus() {
+        const ring = $('fpRing');
+        $('fpClock').textContent = fmtClock(left);
+        fpArc.style.strokeDashoffset = -C * (1 - left / total);
+        ring.classList.toggle('break', phase !== 'focus');
+        ring.classList.toggle('paused', !running);
+        ring.classList.toggle('final', running && left <= 10);
+        $('fpState').textContent = running ? (phase === 'focus' ? 'FOCUSING' : 'BREAK') : (left === total ? 'TAP TO START' : 'PAUSED');
+        $('fpModeBtn').firstChild.textContent = phase === 'focus' ? 'FOCUS' : 'BREAK';
+        $('fpModeSub').textContent = phase === 'focus' ? `${(block % 4) + 1} of 4` : '5 min';
+        [...$('fpCycle').children].forEach((dot, i) => {
+          dot.className = i < (block % 4) ? 'done' : (i === (block % 4) && phase === 'focus' ? 'now' : '');
+        });
+        $('fpMainIcon').innerHTML = running
+          ? '<path d="M7 5h4v14H7zm6 0h4v14h-4z"/>'
+          : '<path d="M8 5v14l11-7z"/>';
+        $('fpTodayTotal').textContent = fmtTotal(todaySec);
+        $('fpTodayBlocks').textContent = String(todayBlocks);
+      }
+      function finishFocusPhase(credit) {
+        if (credit && phase === 'focus') {
+          block++;
+          todayBlocks++;
+          [523, 659, 784, 1046].forEach((f, i) => beep(f, 0.35, 'sine', 0.09, i * 0.12));
+        }
+        phase = phase === 'focus' ? 'break' : 'focus';
+        total = left = phase === 'focus' ? FOCUS_SEC : BREAK_SEC;
+        running = false;
+        renderFocus();
+      }
+      function toggleFocus() {
+        running = !running;
+        if (running) { beep(523, 0.1); beep(784, 0.14, 'sine', 0.08, 0.08); }
+        else { beep(784, 0.09); beep(523, 0.12, 'sine', 0.07, 0.07); }
+        renderFocus();
+      }
+      $('fpMain').addEventListener('click', (e) => { e.stopPropagation(); toggleFocus(); });
+      $('fpRing').addEventListener('click', (e) => { e.stopPropagation(); toggleFocus(); });
+      $('fpReset').addEventListener('click', (e) => { e.stopPropagation(); running = false; left = total; beep(620, 0.05); renderFocus(); });
+      $('fpSkip').addEventListener('click', (e) => { e.stopPropagation(); beep(900, 0.05); finishFocusPhase(false); });
+      $('fpModeBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        accentIdx = (accentIdx + 1) % ACCENTS.length;
+        document.documentElement.style.setProperty('--focus', ACCENTS[accentIdx]);
+        beep(1400, 0.03, 'triangle', 0.05);
+      });
+      $('speed1').addEventListener('click', () => { speed = 1; $('speed1').classList.add('on'); $('speed30').classList.remove('on'); });
+      $('speed30').addEventListener('click', () => { speed = 30; $('speed30').classList.add('on'); $('speed1').classList.remove('on'); });
+
+      let lastWhole = null;
+      function tick(ts) {
+        if (running && lastTs) {
+          const dt = ((ts - lastTs) / 1000) * speed;
+          left -= dt;
+          if (phase === 'focus') todaySec += dt;
+          const whole = Math.ceil(left);
+          if (whole !== lastWhole && whole <= 10 && whole > 0) beep(whole <= 3 ? 1320 : 990, 0.05, 'triangle', 0.07);
+          lastWhole = whole;
+          if (left <= 0) finishFocusPhase(true);
+          else renderFocus();
+        }
+        lastTs = ts;
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+      renderFocus();
+
+      // 4. Interactive Pace Calculator
+      const usedSlider = $('usedSlider');
+      const elapsedSlider = $('elapsedSlider');
+      function updateCalc() {
+        const used = Number(usedSlider.value);
+        const elapsed = Number(elapsedSlider.value);
+        const pace = used / Math.max(1, elapsed);
+        const elapsedMins = Math.round((elapsed / 100) * 300);
+        const eh = Math.floor(elapsedMins / 60), em = elapsedMins % 60;
+        const usageColor = used >= 90 ? 'var(--hot)' : used >= 70 ? 'var(--orange)' : used >= 50 ? 'var(--warn)' : 'var(--ok)';
+        const paceColor = pace >= 1.5 ? 'var(--hot)' : pace >= 1.1 ? 'var(--orange)' : pace >= 0.9 ? 'var(--warn)' : 'var(--ok)';
+
+        $('usedOut').textContent = `${used}%`;
+        $('elapsedOut').textContent = `${elapsed}% (${eh}h ${String(em).padStart(2, '0')}m)`;
+        $('calcPct').textContent = `${used}%`;
+        $('calcPct').style.color = usageColor;
+        $('calcBar').style.width = `${used}%`;
+        $('calcBar').style.background = usageColor;
+        $('calcPace').textContent = `${pace.toFixed(1)}x`;
+        $('calcPace').style.color = paceColor;
+
+        let verdict;
+        if (used >= 100) {
+          verdict = 'Quota exhausted — waiting for the next window reset.';
+        } else if (pace > 1.05) {
+          const totalAtRateMins = 300 / pace;
+          const earlyMins = Math.max(1, Math.round(300 - totalAtRateMins));
+          const h = Math.floor(earlyMins / 60), m = earlyMins % 60;
+          verdict = `At ${pace.toFixed(1)}x pace, you will hit 100% about ${h ? `${h}h ${m}m` : `${m}m`} before the window resets.`;
+        } else if (pace >= 0.9) {
+          verdict = `At ${pace.toFixed(1)}x pace, you are tracking right alongside the reset clock.`;
+        } else {
+          const projected = Math.min(100, Math.round(pace * 100));
+          verdict = `At ${pace.toFixed(1)}x pace, you are on track to end the window around ${projected}% used (${100 - projected}% spare).`;
+        }
+        $('calcVerdict').textContent = verdict;
+      }
+      usedSlider.addEventListener('input', updateCalc);
+      elapsedSlider.addEventListener('input', updateCalc);
+      updateCalc();
+
+      // 5. Hydrate latest release links & star count gracefully from GitHub API
+      fetch('https://api.github.com/repos/silverdolphin863/claude-code-meter/releases/latest')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((rel) => {
+          if (!rel || !rel.tag_name) return;
+          $('navVersion').textContent = rel.tag_name;
+          const assets = Array.isArray(rel.assets) ? rel.assets : [];
+          const exe = assets.find((a) => /^CCMeter-Setup-.*\.exe$/i.test(a.name));
+          const fw = assets.find((a) => /^CCMeter-LCD-Firmware-.*\.zip$/i.test(a.name));
+          if (exe?.browser_download_url) {
+            $('navDownload').href = exe.browser_download_url;
+            $('heroInstaller').href = exe.browser_download_url;
+            $('ctaInstaller').href = exe.browser_download_url;
+            $('heroInstallerLabel').textContent = `Download ${rel.tag_name} (Windows)`;
+          }
+          if (fw?.browser_download_url) {
+            $('heroFirmware').href = fw.browser_download_url;
+            const m = /Firmware-(\d+\.\d+\.\d+)/i.exec(fw.name);
+            if (m) $('heroFirmwareLabel').textContent = `ESP32 Firmware ${m[1]}`;
+          }
+        })
+        .catch(() => {});
+
+      fetch('https://api.github.com/repos/silverdolphin863/claude-code-meter')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((repo) => {
+          if (repo && typeof repo.stargazers_count === 'number' && repo.stargazers_count > 0) {
+            $('starCount').textContent = `★ ${repo.stargazers_count}`;
+          }
+        })
+        .catch(() => {});
+    })();
+  </script>
+</body>
+</html>

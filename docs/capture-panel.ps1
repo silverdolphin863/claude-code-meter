@@ -21,10 +21,12 @@ if (Get-NetTCPConnection -LocalPort $capturePort -ErrorAction SilentlyContinue) 
 New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
 
 $env:PORT = [string]$capturePort
+$env:CCMETER_CODEX_LIVE = '0'
+$env:CCMETER_GEMINI_LIVE = '0'
 $env:WIDGET_CAPTURE = $capturePath
 $env:WIDGET_MODE = 'full'
 $env:WIDGET_EVAL = Get-Content -LiteralPath $fixturePath -Raw
-$env:WIDGET_WAIT = '300'
+$env:WIDGET_WAIT = '900'
 
 $startOptions = @{
   FilePath = $electronPath
