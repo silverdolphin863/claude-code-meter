@@ -5,7 +5,7 @@
 
 namespace ccmeter {
 
-constexpr size_t kMaxSections = 2;
+constexpr size_t kMaxSections = 3;
 constexpr size_t kMaxLimitsPerSection = 8;
 constexpr size_t kSectionIdSize = 16;
 constexpr size_t kSectionNameSize = 32;

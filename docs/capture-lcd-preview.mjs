@@ -34,6 +34,7 @@ async function capturePreview() {
       }
       const previewDocument = frame?.contentDocument || document;
       await previewDocument.fonts.ready;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const rect = (selector) => {
         const { left, right, top, bottom, width, height } = previewDocument.querySelector(selector).getBoundingClientRect();
         return { left, right, top, bottom, width, height };

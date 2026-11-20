@@ -1,9 +1,10 @@
-// Usage widget: serves rate-limit + context gauges for Claude Code and Codex.
+// Usage widget: serves rate-limit + context gauges for Claude Code, Codex, and Gemini.
 // Data sources:
 //   Claude limits  -> Anthropic usage API with ~/.claude/usage-cache.json
 //   Claude context -> newest ~/.claude/projects/**/*.jsonl (last assistant usage)
 //   Codex limits   -> installed Codex app-server account/rateLimits/read
 //   Codex fallback -> newest ~/.codex/sessions/**/*.jsonl (last token_count event)
+//   Gemini limits  -> installed Antigravity CLI (`agy -p "/usage" --output-format json`) or ~/.gemini/usage-cache.json
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -11,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseGeminiQuotaPayload, readGeminiCache } from './gemini-usage.mjs';
 
 const HOME = process.env.CCMETER_HOME || os.homedir();
 const CLAUDE_CACHE = path.join(HOME, '.claude', 'usage-cache.json');
@@ -31,6 +33,7 @@ const MANUAL_REFRESH_COOLDOWN_MS = 300_000;
 const BACKOFF_FILE = path.join(HOME, '.claude', '.usage-api-backoff.json');
 const LEGACY_BACKOFF_FILE = path.join(HOME, '.claude', '.ccmeter-refresh.json');
 const CODEX_SESSIONS = path.join(HOME, '.codex', 'sessions');
+const GEMINI_CACHE = process.env.CCMETER_GEMINI_CACHE || path.join(HOME, '.gemini', 'usage-cache.json');
 const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(APP_ROOT, 'public');
 let APP_VERSION = 'unknown';
@@ -65,6 +68,15 @@ const CODEX_LIVE_MAX_STALE_MS = 900_000;
 const CODEX_LIVE_TIMEOUT_MS = 10_000;
 const CODEX_LIVE_ENABLED = process.env.CCMETER_CODEX_LIVE !== '0';
 const codexLiveCache = { snapshot: null, at: 0, error: null, errorAt: 0, pending: null };
+
+// Official Antigravity CLI (`agy`) exposes zero-token quota JSON via
+// `agy -p "/usage" --output-format json`. Cache it for 5 minutes just like Codex.
+const GEMINI_LIVE_TTL_MS = 300_000;
+const GEMINI_LIVE_RETRY_MS = 60_000;
+const GEMINI_LIVE_MAX_STALE_MS = 900_000;
+const GEMINI_LIVE_TIMEOUT_MS = 12_000;
+const GEMINI_LIVE_ENABLED = process.env.CCMETER_GEMINI_LIVE !== '0';
+const geminiLiveCache = { snapshot: null, at: 0, error: null, errorAt: 0, pending: null };
 
 function findExecutable(name) {
   // npm installs both a POSIX shim without an extension and a Windows .cmd
@@ -1000,21 +1012,202 @@ async function codexSection(forceLive = false) {
   return fallback;
 }
 
-async function payload(forceCodex = false) {
+function findAgyExecutable() {
+  const onPath = findExecutable('agy');
+  if (onPath) return onPath;
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local');
+    const candidates = [
+      path.join(localAppData, 'agy', 'bin', 'agy.exe'),
+      path.join(HOME, '.local', 'bin', 'agy.exe'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } else {
+    const candidate = path.join(HOME, '.local', 'bin', 'agy');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function geminiLaunch() {
+  if (!GEMINI_LIVE_ENABLED) return null;
+  const override = process.env.CCMETER_GEMINI_COMMAND || '';
+  const command = override || findAgyExecutable();
+  if (!command) return null;
+
+  let args = ['-p', '/usage', '--output-format', 'json', '--print-timeout', '10s'];
+  if (override && process.env.CCMETER_GEMINI_COMMAND_ARGS) {
+    try {
+      const parsed = JSON.parse(process.env.CCMETER_GEMINI_COMMAND_ARGS);
+      if (Array.isArray(parsed) && parsed.every((arg) => typeof arg === 'string')) args = parsed;
+    } catch { /* invalid test override, fall back to default args */ }
+  }
+
+  return {
+    command,
+    args,
+    shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
+  };
+}
+
+function queryLiveGeminiUsage() {
+  const launch = geminiLaunch();
+  if (!launch) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let settled = false;
+    let child;
+    try {
+      child = spawn(launch.command, launch.args, {
+        windowsHide: true,
+        shell: launch.shell,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child.kill(); } catch { /* already exited */ }
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => finish(null), GEMINI_LIVE_TIMEOUT_MS);
+    timer.unref?.();
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      if (stdout.length < 131_072) stdout += chunk;
+    });
+    child.once('error', () => finish(null));
+    child.once('close', (code) => {
+      if (code !== 0 && !stdout.trim()) return finish(null);
+      let raw = null;
+      const trimmed = stdout.trim();
+      if (trimmed.startsWith('{')) {
+        try { raw = JSON.parse(trimmed); } catch { raw = null; }
+      }
+      if (!raw) {
+        const start = stdout.indexOf('{');
+        if (start >= 0) raw = objectAt(stdout, start);
+      }
+      const parsed = parseGeminiQuotaPayload(raw, Date.now());
+      finish(parsed && parsed.limits.length > 0 ? parsed : null);
+    });
+  });
+}
+
+async function liveGeminiSnapshot(force = false) {
+  if (!geminiLaunch()) return null;
+  const now = Date.now();
+  if (!force && geminiLiveCache.snapshot && now - geminiLiveCache.at < GEMINI_LIVE_TTL_MS) {
+    return geminiLiveCache.snapshot;
+  }
+  if (!force && geminiLiveCache.errorAt && now - geminiLiveCache.errorAt < GEMINI_LIVE_RETRY_MS) {
+    return geminiLiveCache.snapshot && now - geminiLiveCache.at < GEMINI_LIVE_MAX_STALE_MS
+      ? geminiLiveCache.snapshot
+      : null;
+  }
+  if (!geminiLiveCache.pending) {
+    geminiLiveCache.pending = queryLiveGeminiUsage()
+      .then((snapshot) => {
+        if (snapshot) {
+          geminiLiveCache.snapshot = snapshot;
+          geminiLiveCache.at = Date.now();
+          geminiLiveCache.error = null;
+          geminiLiveCache.errorAt = 0;
+        } else {
+          geminiLiveCache.error = 'live Gemini usage unavailable';
+          geminiLiveCache.errorAt = Date.now();
+        }
+        return snapshot;
+      })
+      .finally(() => {
+        geminiLiveCache.pending = null;
+      });
+  }
+  const latest = await geminiLiveCache.pending;
+  if (latest) return latest;
+  return geminiLiveCache.snapshot && Date.now() - geminiLiveCache.at < GEMINI_LIVE_MAX_STALE_MS
+    ? geminiLiveCache.snapshot
+    : null;
+}
+
+async function geminiSection(forceLive = false) {
+  const hasCli = Boolean(geminiLaunch());
+  const cached = readGeminiCache(GEMINI_CACHE, Date.now());
+  const installed = Boolean(cached || hasCli);
+
+  let live = null;
+  if (hasCli) {
+    const canWait = forceLive || geminiLiveCache.snapshot;
+    live = canWait ? await liveGeminiSnapshot(forceLive) : null;
+    if (!canWait) liveGeminiSnapshot(false);
+  }
+
+  const liveStaleMs = live && geminiLiveCache.at ? Math.max(0, Date.now() - geminiLiveCache.at) : Infinity;
+  const cacheStaleMs = cached ? cached.stale_ms : Infinity;
+  const useLive = Boolean(live && live.limits.length && (!cached || !cached.limits.length || liveStaleMs <= cacheStaleMs));
+
+  if (useLive) {
+    return {
+      id: 'gemini',
+      name: 'Gemini',
+      plan: live.plan || cached?.plan || null,
+      installed: true,
+      limits: live.limits,
+      stale_ms: liveStaleMs,
+      error: null,
+      source: 'live',
+    };
+  }
+  if (cached && cached.limits.length) {
+    return {
+      id: 'gemini',
+      name: 'Gemini',
+      plan: cached.plan,
+      installed: true,
+      limits: cached.limits,
+      stale_ms: cached.stale_ms,
+      error: null,
+      source: 'cache',
+    };
+  }
+  return {
+    id: 'gemini',
+    name: 'Gemini',
+    plan: null,
+    installed,
+    limits: [],
+    stale_ms: null,
+    error: !installed ? 'Gemini not detected' : (geminiLiveCache.error || null),
+    source: hasCli && !geminiLiveCache.error ? 'pending' : 'cache',
+  };
+}
+
+async function payload(forceLive = false) {
   return {
     generated_at: new Date().toISOString(),
-    sections: [claudeSection(), await codexSection(forceCodex)],
+    sections: [claudeSection(), await codexSection(forceLive), await geminiSection(forceLive)],
   };
 }
 
 async function refreshedPayload() {
-  // Claude and Codex are independent sources. Waiting for them in sequence can
+  // Claude, Codex, and Gemini are independent sources. Waiting for them in sequence can
   // take almost the LCD's full 20-second animation timeout, after which a valid
-  // answer looks like no answer. Run both refreshes together and tell the panel
+  // answer looks like no answer. Run all refreshes together and tell the panel
   // whether Claude was updated or deliberately refused for safety.
-  const [status, codex] = await Promise.all([
+  const [status, codex, gemini] = await Promise.all([
     refreshClaudeUsage(true),
     codexSection(true),
+    geminiSection(true),
   ]);
   const manualRefresh = { status: status || 'failed' };
   if (status === 'cooldown') manualRefresh.retry_at = lastRefreshAttemptAt + MANUAL_REFRESH_COOLDOWN_MS;
@@ -1022,7 +1215,7 @@ async function refreshedPayload() {
   return {
     generated_at: new Date().toISOString(),
     manual_refresh: manualRefresh,
-    sections: [claudeSection(), codex],
+    sections: [claudeSection(), codex, gemini],
   };
 }
 
@@ -1248,9 +1441,10 @@ const HOST = process.env.CCMETER_HOST || '127.0.0.1';
 
 server.listen(PORT, HOST, () => {
   console.log('usage widget on http://localhost:' + PORT);
-  // Start the Codex query while the window is still opening, so the live
-  // numbers are usually cached by the time the first poll arrives.
+  // Start the Codex and Gemini queries while the window is still opening, so
+  // live numbers are usually cached by the time the first poll arrives.
   liveCodexSnapshot(false);
+  liveGeminiSnapshot(false);
 });
 
 if (process.env.CCMETER_PANEL_TOKEN) {

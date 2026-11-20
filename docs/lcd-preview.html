@@ -50,7 +50,7 @@
     }
 
     header {
-      height: 54px;
+      height: 50px;
       display: flex;
       align-items: center;
       gap: 10px;
@@ -166,14 +166,17 @@
     }
 
     main {
-      height: 426px;
-      padding: 0 14px 12px;
+      height: 430px;
+      padding: 0 14px 7px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
     .setup-panel {
       display: none;
-      height: 426px;
-      padding: 10px 14px 80px;
+      height: 430px;
+      padding: 14px 14px 80px;
     }
 
     .lcd[data-state="config"] main { display: none; }
@@ -218,17 +221,18 @@
 
     .card {
       width: 100%;
-      padding: 10px 14px;
+      padding: 5px 14px 7px;
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 15px;
+      border-radius: 13px;
     }
 
-    .card.claude { height: 294px; }
-    .card.codex { height: 112px; margin-top: 8px; }
+    .card.claude { height: 195px; }
+    .card.codex { height: 79px; }
+    .card.gemini { height: 137px; }
 
     .provider {
-      height: 22px;
+      height: 16px;
       display: flex;
       align-items: baseline;
       gap: 7px;
@@ -242,7 +246,7 @@
 
     .plan {
       color: var(--accent);
-      font-size: 9px;
+      font-size: 11px;
       letter-spacing: 0.04em;
     }
 
@@ -257,15 +261,14 @@
     .lcd[data-state="auth"] .provider-alert { display: inline; }
 
     .meter-row {
-      height: 80px;
-      padding-top: 2px;
+      height: 51px;
+      margin-top: 2px;
     }
 
-    .meter-row + .meter-row { margin-top: 2px; }
-    .codex .meter-row { height: 70px; }
+    .meter-row + .meter-row { margin-top: 7px; }
 
     .metric-head {
-      height: 24px;
+      height: 21px;
       display: flex;
       align-items: center;
       gap: 9px;
@@ -286,12 +289,13 @@
 
     .pace {
       min-width: 54px;
-      padding: 3px 7px 2px;
-      border-radius: 6px;
+      height: 20px;
+      padding: 2px 7px;
+      border-radius: 5px;
       background: var(--badge);
       color: var(--ok);
       font-size: 15px;
-      line-height: 1;
+      line-height: 16px;
       font-weight: 700;
       text-align: center;
     }
@@ -311,10 +315,10 @@
 
     .track {
       position: relative;
-      height: 12px;
+      height: 10px;
       margin-top: 2px;
       overflow: hidden;
-      border-radius: 6px;
+      border-radius: 5px;
       background:
         repeating-linear-gradient(135deg, transparent 0 6px, var(--track-tex) 6px 8px),
         var(--track);
@@ -322,6 +326,7 @@
 
     .fill {
       width: var(--percent);
+      min-width: 10px;
       height: 100%;
       border-radius: inherit;
       background: var(--ok);
@@ -330,8 +335,8 @@
     .fill.warn { background: var(--warn); }
 
     .reset {
-      height: 20px;
-      margin-top: 7px;
+      height: 16px;
+      margin-top: 5px;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -341,8 +346,8 @@
     }
 
     .clock {
-      width: 12px;
-      height: 12px;
+      width: 11px;
+      height: 11px;
       flex: none;
       fill: none;
       stroke: var(--dim);
@@ -451,7 +456,7 @@
       </section>
 
       <section class="card codex">
-        <div class="provider">Codex <span class="plan">PRO</span></div>
+        <div class="provider">Codex</div>
         <div class="meter-row">
           <div class="metric-head">
             <span class="label">Weekly</span>
@@ -463,6 +468,36 @@
             <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
             <span class="countdown">4d 20h</span>
             <span class="reset-target">WED 13:18</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card gemini">
+        <div class="provider">Gemini</div>
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">5-hour</span>
+            <span class="percent">24%</span>
+            <span class="pace">0.4x</span>
+          </div>
+          <div class="track"><div class="fill" style="--percent: 24%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">1h 56m</span>
+            <span class="reset-target">TODAY 15:44</span>
+          </div>
+        </div>
+        <div class="meter-row">
+          <div class="metric-head">
+            <span class="label">Weekly</span>
+            <span class="percent">6%</span>
+            <span class="pace">0.6x</span>
+          </div>
+          <div class="track"><div class="fill" style="--percent: 6%"></div></div>
+          <div class="reset">
+            <svg class="clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 4.5V8l2.4 1.6"></path></svg>
+            <span class="countdown">6d 5h</span>
+            <span class="reset-target">THU 18:48</span>
           </div>
         </div>
       </section>

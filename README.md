@@ -1,7 +1,7 @@
 # CC Meter
 
-A tray widget for Windows that shows how much of your **Claude Code** and **Codex**
-rate limits you have burned, and how fast you are burning them.
+A tray widget for Windows that shows how much of your **Claude Code**, **Codex**, and
+**Gemini** (Antigravity) rate limits you have burned, and how fast you are burning them.
 
 ![CC Meter overview](docs/showcase.png)
 
@@ -24,6 +24,9 @@ coasting. `1.6x` means you will hit the wall early, and roughly how early.
 - **Codex** - the account-wide windows Codex currently reports. One shared
   pool; some plans expose only a weekly window, and CC Meter never invents a
   missing one.
+- **Gemini** - the 5-hour and weekly Gemini quota pools reported by the
+  Antigravity CLI (`agy`), automatically converted to percent used with pace
+  and reset countdowns. Hidden automatically if `agy` is not installed.
 
 Two modes: a compact strip that docks against the top edge of the screen (with
 optional auto-hide until you touch the edge), and a full panel with countdowns.
@@ -150,9 +153,9 @@ restart.
 
 CC Meter has no hosted service. It makes the Claude usage request to Anthropic
 from your machine with your own OAuth token.
-For Codex, it asks the installed Codex CLI for the current account snapshot;
-Codex handles its own authenticated OpenAI request. CC Meter never reads the
-Codex authentication token.
+For Codex and Gemini, it queries the locally installed Codex and Antigravity
+CLIs for the current account snapshot; each CLI handles its own authenticated
+request, and CC Meter never reads Codex or Google authentication tokens.
 
 **Claude**: reads the standard Claude Code OAuth token from
 `~/.claude/.credentials.json` and calls
@@ -168,6 +171,12 @@ account-wide windows even when this machine's session files are old. If an
 older Codex version does not expose that method, CC Meter falls back to recent
 files under `~/.codex/sessions/` and discards every window whose reset time has
 already passed.
+
+**Gemini**: runs `agy -p "/usage" --output-format json --print-timeout 10s`
+against the locally installed Antigravity CLI, cached for five minutes. The
+command uses zero tokens, creates no conversation, and returns the Gemini
+Models 5-hour and weekly buckets. An optional local cache at
+`~/.gemini/usage-cache.json` is also supported as a fallback.
 
 ### About that token
 
@@ -243,4 +252,4 @@ the display, and one Windows app that also supplies the desktop and tray meter.
 
 MIT. See [LICENSE](LICENSE).
 
-Not affiliated with, endorsed by, or supported by Anthropic or OpenAI.
+Not affiliated with, endorsed by, or supported by Anthropic, OpenAI, or Google.

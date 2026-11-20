@@ -293,7 +293,7 @@ let lastTrayTip = '';
 // truth (delivered via onState). localStorage is only for plain-browser use;
 // reading it under Electron let a stale value silently override the state
 // file, which is how the Codex meter once vanished without being asked to.
-let prefs = { claude: 'auto', codex: 'auto', showReset: true };
+let prefs = { claude: 'auto', codex: 'auto', gemini: 'auto', showReset: true };
 if (!window.widget) {
   try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem('meterPrefs') || '{}') }; } catch {}
 }
@@ -424,7 +424,7 @@ function renderFull() {
     if (s.error) inner = '<div class="err">' + s.error + '</div>';
     else if (!s.limits.length) inner = '<div class="empty">no data yet</div>';
     else inner = s.limits.map(rowHtml).join('');
-    const plan = s.plan ? '<span class="plan">' + s.plan + '</span>' : '';
+    const plan = s.plan && s.id !== 'codex' ? '<span class="plan">' + s.plan + '</span>' : '';
     out.push('<div class="card"><h2>' + s.name + plan + '</h2>' + inner + '</div>');
   }
   if (structure !== lastFullStructure) {
@@ -596,7 +596,7 @@ function render() {
 
   if (window.widget?.setTrayTooltip) {
     const trayParts = visibleSections().flatMap((s) => {
-      const name = s.id === 'claude' ? 'Claude' : 'Codex';
+      const name = s.id === 'claude' ? 'Claude' : s.id === 'gemini' ? 'Gemini' : 'Codex';
       if (s.limits.length) {
         return [`${name} ${s.limits.map((l) => shortLabel(l.label) + ' ' + l.percent + '%').join(', ')}`];
       }
@@ -763,7 +763,7 @@ if (window.widget) {
   window.widget.onState((s) => {
     autohide = Boolean(s.autohide);
     paintAutohide();
-    prefs = { claude: 'auto', codex: 'auto', showReset: true, ...(s.prefs || {}) };
+    prefs = { claude: 'auto', codex: 'auto', gemini: 'auto', showReset: true, ...(s.prefs || {}) };
     setMode(s.mode);
   });
   paintAutohide();

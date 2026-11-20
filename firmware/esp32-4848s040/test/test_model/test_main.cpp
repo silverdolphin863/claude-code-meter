@@ -74,9 +74,39 @@ void test_serial_usage_envelope_rejects_non_usage_messages() {
 }
 
 void test_serial_protocol_lines_are_stable() {
-  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.4\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"hello\",\"firmware\":\"1.1.5\",\"model\":\"ESP32-4848S040\"}", serialHelloLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"ack\"}", serialAckLine());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"refresh\"}", serialRefreshLine());
+}
+
+void test_usage_payload_maps_three_sections_including_gemini_and_antigravity_alias() {
+  const char payload[] = R"json({
+    "generated_at":"2026-11-20T12:00:00Z",
+    "sections":[
+      {"id":"claude","name":"Claude Code","limits":[{"label":"5-hour","percent":18,"resets_at":"2026-11-20T15:00:00Z","window_hours":5}]},
+      {"id":"codex","name":"Codex","plan":"pro","limits":[{"label":"Weekly","percent":3,"resets_at":"2026-11-27T12:00:00Z","window_hours":168}]},
+      {"id":"antigravity","limits":[
+        {"label":"5-hour","percent":24,"resets_at":"2026-11-20T14:44:13Z","window_hours":5},
+        {"label":"Weekly","percent":6,"resets_at":"2026-11-26T17:48:19Z","window_hours":168}
+      ]}
+    ]
+  })json";
+
+  UsageSnapshot snapshot;
+  char error[64] = {};
+  TEST_ASSERT_TRUE(parseUsageJson(payload, strlen(payload), snapshot, error, sizeof(error)));
+  TEST_ASSERT_TRUE(snapshot.valid);
+  TEST_ASSERT_EQUAL_UINT(3, snapshot.sectionCount);
+
+  const UsageSection* gemini = findSection(snapshot, "gemini");
+  TEST_ASSERT_NOT_NULL(gemini);
+  TEST_ASSERT_EQUAL_STRING("gemini", gemini->id);
+  TEST_ASSERT_EQUAL_STRING("Gemini", gemini->name);
+  TEST_ASSERT_EQUAL_UINT(2, gemini->limitCount);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 24.0f, gemini->limits[0].percent);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 6.0f, gemini->limits[1].percent);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 5.0f, gemini->limits[0].windowHours);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 168.0f, gemini->limits[1].windowHours);
 }
 
 void test_parser_keeps_valid_limit_when_another_limit_is_malformed() {
@@ -303,6 +333,7 @@ int main() {
   RUN_TEST(test_serial_usage_envelope_maps_the_same_panel_payload);
   RUN_TEST(test_serial_usage_envelope_rejects_non_usage_messages);
   RUN_TEST(test_serial_protocol_lines_are_stable);
+  RUN_TEST(test_usage_payload_maps_three_sections_including_gemini_and_antigravity_alias);
   RUN_TEST(test_parser_keeps_valid_limit_when_another_limit_is_malformed);
   RUN_TEST(test_parser_rejects_missing_sections);
   RUN_TEST(test_countdown_and_reset_format_match_desktop_shape);

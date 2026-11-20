@@ -35,7 +35,8 @@
     font-size: 13px; cursor: pointer;
   }
   header button:hover { background: var(--card); color: var(--ink); }
-  main { padding: 2px 14px 14px; }
+  main { flex: 1; overflow-y: auto; padding: 2px 14px 14px; }
+  main::-webkit-scrollbar { width: 0; }
   h2 {
     font-size: 9.5px; font-weight: 800; text-transform: uppercase;
     letter-spacing: 0.1em; color: var(--dim); margin: 10px 0 4px;
@@ -92,6 +93,7 @@
   <h2>Meters</h2>
   <label><input type="checkbox" id="mClaude"> Claude Code <span class="na" id="naClaude"></span></label>
   <label><input type="checkbox" id="mCodex"> Codex <span class="na" id="naCodex"></span></label>
+  <label><input type="checkbox" id="mGemini"> Gemini <span class="na" id="naGemini"></span></label>
   <p class="hint">A tool that is not installed is hidden automatically. Ticking
   a box overrides that.</p>
 
@@ -132,7 +134,7 @@
 </div>
 
 <script>
-let prefs = { claude: 'auto', codex: 'auto', showReset: true };
+let prefs = { claude: 'auto', codex: 'auto', gemini: 'auto', showReset: true };
 let sections = [];
 let panel = { config: { enabled: false, displayOnly: false, token: '' }, endpoints: [], status: {} };
 
@@ -145,7 +147,11 @@ function visible(id) {
 }
 
 function paint() {
-  for (const [id, box, na] of [['claude', 'mClaude', 'naClaude'], ['codex', 'mCodex', 'naCodex']]) {
+  for (const [id, box, na] of [
+    ['claude', 'mClaude', 'naClaude'],
+    ['codex', 'mCodex', 'naCodex'],
+    ['gemini', 'mGemini', 'naGemini'],
+  ]) {
     document.getElementById(box).checked = visible(id);
     const s = sections.find((x) => x.id === id);
     document.getElementById(na).textContent = s && s.installed === false ? 'not detected' : '';
@@ -205,7 +211,7 @@ function paintPanel() {
 }
 
 window.widget.onState((s) => {
-  prefs = { claude: 'auto', codex: 'auto', showReset: true, ...(s.prefs || {}) };
+  prefs = { claude: 'auto', codex: 'auto', gemini: 'auto', showReset: true, ...(s.prefs || {}) };
   panel = s.panel || panel;
   document.getElementById('ah').checked = Boolean(s.autohide);
   document.getElementById('rt').checked = prefs.showReset !== false;
@@ -284,7 +290,7 @@ document.getElementById('reauth').onclick = async () => {
   paintAuth();
 };
 
-for (const [id, box] of [['claude', 'mClaude'], ['codex', 'mCodex']]) {
+for (const [id, box] of [['claude', 'mClaude'], ['codex', 'mCodex'], ['gemini', 'mGemini']]) {
   document.getElementById(box).onchange = (e) => {
     const s = sections.find((x) => x.id === id);
     const auto = s ? s.installed !== false : true;

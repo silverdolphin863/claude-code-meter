@@ -1,9 +1,9 @@
 {
   "name": "cc-meter",
-  "version": "1.1.20",
+  "version": "1.1.21",
   "private": true,
   "type": "module",
-  "description": "Tray gauge for Claude Code and Codex rate limits",
+  "description": "Tray gauge for Claude Code, Codex, and Gemini rate limits",
   "author": "silverdolphin863",
   "main": "main.mjs",
   "scripts": {

@@ -187,6 +187,7 @@ assert.equal(
       CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
       CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
       CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_LIVE: '0',
       PORT: String(renewPort),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -273,6 +274,7 @@ assert.equal(
     CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
     CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
     CCMETER_CODEX_LIVE: '0',
+    CCMETER_GEMINI_LIVE: '0',
   };
   const boot = async (port) => {
     const child = spawn(process.execPath, ['server.mjs'], {
@@ -373,6 +375,7 @@ assert.equal(
       CCMETER_USAGE_API: `http://127.0.0.1:${usageMock.address().port}/usage`,
       CCMETER_OAUTH_TOKEN_URL: `http://127.0.0.1:${oauthMock.address().port}/token`,
       CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_LIVE: '0',
       PORT: String(port),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -456,6 +459,7 @@ assert.equal(
       ANTHROPIC_BASE_URL: base,
       CCMETER_USAGE_API: `${base}/usage`,
       CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_LIVE: '0',
       PORT: String(port),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -707,6 +711,13 @@ assert.match(firmwareDisplaySource,
 assert.match(firmwareDisplaySource,
   /y = static_cast<int16_t>\(map\(touch\.points\[0\]\.y, 480, 0, 0, gfx->height\(\) - 1\)\);/,
   'physical LCD top and bottom must map to visual top and bottom');
+const firmwareModelHeaderSource = await fs.readFile(new URL('./firmware/esp32-4848s040/src/usage_model_core.h', import.meta.url), 'utf8');
+assert.match(firmwareModelHeaderSource, /kMaxSections = 3;/,
+  'firmware usage model must accept three provider sections (Claude, Codex, Gemini)');
+assert.match(firmwareUiSource, /strcmp\(section\.id, "gemini"\) == 0\) return "GEMINI";/,
+  'firmware must render the Gemini card title as GEMINI');
+assert.match(firmwareUiSource, /MeterLayout compactThreeCardLayout/,
+  'firmware must provide a three-card layout tier when Gemini data is active');
 console.log('hardware display protocol: PASS');
 
 // v1.0.6 shipped a package whose asar was missing updater.mjs, because
@@ -854,6 +865,7 @@ await new Promise((resolve) => mockUsageApi.listen(mockPort, '127.0.0.1', resolv
       CCMETER_HOME: migrationRoot,
       CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
       CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_LIVE: '0',
       PORT: String(migrationPort),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -903,6 +915,7 @@ const child = spawn(process.execPath, ['server.mjs'], {
     CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
     CCMETER_CODEX_COMMAND: process.execPath,
     CCMETER_CODEX_COMMAND_ARGS: JSON.stringify([fakeCodex]),
+    CCMETER_GEMINI_LIVE: '0',
     CCMETER_PANEL_PORT: String(panelPort),
     CCMETER_PANEL_TOKEN: panelToken,
     PORT: String(port),
@@ -1052,6 +1065,7 @@ try {
       CCMETER_HOME: root,
       CCMETER_USAGE_API: `http://127.0.0.1:${mockPort}/usage`,
       CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_LIVE: '0',
       PORT: String(fallbackPort),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1111,5 +1125,162 @@ try {
     console.log('focus block log: PASS');
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+{
+  const { parseGeminiQuotaPayload } = await import('./gemini-usage.mjs');
+  const nowMs = Date.parse('2026-11-20T12:00:00Z');
+  const agyResponse = {
+    status: 'SUCCESS',
+    command: {
+      name: 'usage',
+      data: {
+        groups: [
+          {
+            name: 'Gemini Models',
+            buckets: [
+              {
+                id: 'gemini-weekly',
+                name: 'Weekly Limit Remaining',
+                window: 'weekly',
+                remaining_fraction: 0.935665,
+                reset_time: '2026-11-26T17:48:19Z',
+              },
+              {
+                id: 'gemini-5h',
+                name: 'Five Hour Limit Remaining',
+                window: '5h',
+                remaining_fraction: 0.764113,
+                reset_time: '2026-11-20T14:44:13Z',
+              },
+            ],
+          },
+          {
+            name: 'Claude and GPT models',
+            buckets: [
+              {
+                id: '3p-5h',
+                name: 'Five Hour Limit Remaining',
+                window: '5h',
+                remaining_fraction: 0.05,
+                reset_time: '2026-11-20T15:00:00Z',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  const parsed = parseGeminiQuotaPayload(agyResponse, nowMs);
+  assert.deepEqual(
+    parsed.limits.map((l) => ({ label: l.label, percent: l.percent, window_hours: l.window_hours })),
+    [
+      { label: '5-hour', percent: 24, window_hours: 5 },
+      { label: 'Weekly', percent: 6, window_hours: 168 },
+    ],
+    'Gemini parser must extract Gemini Models only, convert remaining_fraction to % used, and order 5-hour before Weekly',
+  );
+  const expiredOnly = parseGeminiQuotaPayload({
+    command: {
+      data: {
+        groups: [{
+          name: 'Gemini Models',
+          buckets: [{ id: 'gemini-5h', window: '5h', remaining_fraction: 0.2, reset_time: '2026-11-20T11:00:00Z' }],
+        }],
+      },
+    },
+  }, nowMs);
+  assert.deepEqual(expiredOnly.limits, [], 'expired Gemini windows must be dropped');
+
+  const geminiRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccmeter-gemini-'));
+  const fakeAgy = path.join(geminiRoot, 'fake-agy.mjs');
+  const fiveHourReset = new Date(Date.now() + 2 * 3600_000).toISOString();
+  const weeklyReset = new Date(Date.now() + 6 * 86400_000).toISOString();
+  await fs.writeFile(fakeAgy, `console.log(JSON.stringify(${JSON.stringify({
+    status: 'SUCCESS',
+    command: {
+      name: 'usage',
+      data: {
+        groups: [{
+          name: 'Gemini Models',
+          buckets: [
+            { id: 'gemini-weekly', window: 'weekly', remaining_fraction: 0.94, reset_time: weeklyReset },
+            { id: 'gemini-5h', window: '5h', remaining_fraction: 0.76, reset_time: fiveHourReset },
+          ],
+        }],
+      },
+    },
+  })}));\n`);
+
+  const livePort = await freePort();
+  const liveChild = spawn(process.execPath, ['server.mjs'], {
+    cwd: new URL('.', import.meta.url),
+    env: {
+      ...process.env,
+      CCMETER_HOME: geminiRoot,
+      CCMETER_CODEX_LIVE: '0',
+      CCMETER_GEMINI_COMMAND: process.execPath,
+      CCMETER_GEMINI_COMMAND_ARGS: JSON.stringify([fakeAgy]),
+      PORT: String(livePort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let cacheChild = null;
+  try {
+    let liveGemini = null;
+    const deadline = Date.now() + 8000;
+    while (!liveGemini && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      try {
+        const res = await fetch(`http://127.0.0.1:${livePort}/usage.json`);
+        const body = await res.json();
+        const section = body.sections.find((s) => s.id === 'gemini');
+        if (section?.source === 'live' && section.limits.length === 2) liveGemini = section;
+      } catch { /* booting */ }
+    }
+    assert(liveGemini, 'live Gemini section never arrived from agy command');
+    assert.equal(liveGemini.name, 'Gemini');
+    assert.equal(liveGemini.installed, true);
+    assert.deepEqual(liveGemini.limits.map((l) => [l.label, l.percent, l.window_hours]), [
+      ['5-hour', 24, 5],
+      ['Weekly', 6, 168],
+    ]);
+
+    await fs.mkdir(path.join(geminiRoot, '.gemini'), { recursive: true });
+    await fs.writeFile(path.join(geminiRoot, '.gemini', 'usage-cache.json'), JSON.stringify({
+      plan: 'AI Ultra',
+      limits: [
+        { label: '5-hour', percent: 41, resets_at: fiveHourReset, window_hours: 5 },
+      ],
+    }));
+    const cachePort = await freePort();
+    cacheChild = spawn(process.execPath, ['server.mjs'], {
+      cwd: new URL('.', import.meta.url),
+      env: {
+        ...process.env,
+        CCMETER_HOME: geminiRoot,
+        CCMETER_CODEX_LIVE: '0',
+        CCMETER_GEMINI_LIVE: '0',
+        PORT: String(cachePort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let cacheBody = null;
+    const cacheDeadline = Date.now() + 5000;
+    while (!cacheBody && Date.now() < cacheDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      try { cacheBody = await (await fetch(`http://127.0.0.1:${cachePort}/usage.json`)).json(); } catch { /* booting */ }
+    }
+    assert(cacheBody, 'cache fallback server did not start');
+    const cachedGemini = cacheBody.sections.find((s) => s.id === 'gemini');
+    assert.equal(cachedGemini.source, 'cache');
+    assert.equal(cachedGemini.plan, 'Ultra');
+    assert.deepEqual(cachedGemini.limits.map((l) => [l.label, l.percent]), [['5-hour', 41]]);
+    console.log('gemini usage section: PASS');
+  } finally {
+    liveChild.kill();
+    cacheChild?.kill();
+    await fs.rm(geminiRoot, { recursive: true, force: true });
   }
 }

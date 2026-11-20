@@ -148,10 +148,14 @@ bool readLimit(JsonObjectConst object, UsageLimit& limit) {
 void normalizeSectionName(UsageSection& section) {
   if (containsIgnoreCase(section.id, "claude")) copyText(section.id, sizeof(section.id), "claude");
   else if (containsIgnoreCase(section.id, "codex")) copyText(section.id, sizeof(section.id), "codex");
+  else if (containsIgnoreCase(section.id, "gemini") || containsIgnoreCase(section.id, "antigravity")) {
+    copyText(section.id, sizeof(section.id), "gemini");
+  }
 
   if (!section.name[0]) {
     if (equalsIgnoreCase(section.id, "claude")) copyText(section.name, sizeof(section.name), "Claude Code");
     else if (equalsIgnoreCase(section.id, "codex")) copyText(section.name, sizeof(section.name), "Codex");
+    else if (equalsIgnoreCase(section.id, "gemini")) copyText(section.name, sizeof(section.name), "Gemini");
     else copyText(section.name, sizeof(section.name), section.id[0] ? section.id : "Meter");
   }
 }
@@ -210,7 +214,12 @@ bool parseUsageObject(JsonObjectConst root, UsageSnapshot& snapshot, char* error
     if (id && *id) copyText(section.id, sizeof(section.id), id);
     if (name && *name) copyText(section.name, sizeof(section.name), name);
     if (!section.id[0] && name && *name) copyText(section.id, sizeof(section.id), name);
-    if (!section.id[0]) copyText(section.id, sizeof(section.id), snapshot.sectionCount == 0 ? "claude" : "codex");
+    if (!section.id[0]) {
+      const char* fallback = snapshot.sectionCount == 0 ? "claude"
+                           : snapshot.sectionCount == 1 ? "codex"
+                                                        : "gemini";
+      copyText(section.id, sizeof(section.id), fallback);
+    }
     normalizeSectionName(section);
 
     if (object["installed"].is<bool>()) section.installed = object["installed"].as<bool>();

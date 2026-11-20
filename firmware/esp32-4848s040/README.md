@@ -1,6 +1,6 @@
 # CC Meter ESP32 4848S040 firmware
 
-This is the CC Meter-only firmware for the JCZN/Guition ESP32-4848S040 display. It replaces the vendor weather, clock, and light-control screen with the expanded CC Meter view: Claude Code and Codex cards, usage bars, percentages, pace badges, reset countdowns, freshness, and explicit setup or failure states.
+This is the CC Meter-only firmware for the JCZN/Guition ESP32-4848S040 display. It replaces the vendor weather, clock, and light-control screen with the expanded CC Meter view: Claude Code, Codex, and Gemini cards, usage bars, percentages, pace badges, reset countdowns, freshness, and explicit setup or failure states.
 
 ![Physical ESP32-4848S040 display running CC Meter](../../docs/lcd-hardware.png)
 

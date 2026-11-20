@@ -183,8 +183,13 @@ void drawSettingsIcon(int centerX, int centerY, bool active) {
   canvas()->fillCircle(centerX, centerY, 3, kBackground);
 }
 
-void drawClockIcon(int centerX, int centerY) {
-  canvas()->drawCircle(centerX, centerY, 5, kMuted);
+void drawClockIcon(int centerX, int centerY, int radius) {
+  canvas()->drawCircle(centerX, centerY, radius, kMuted);
+  if (radius <= 4) {
+    canvas()->drawLine(centerX, centerY, centerX, centerY - 2, kMuted);
+    canvas()->drawLine(centerX, centerY, centerX + 2, centerY + 1, kMuted);
+    return;
+  }
   canvas()->drawLine(centerX, centerY, centerX, centerY - 3, kMuted);
   canvas()->drawLine(centerX, centerY, centerX + 3, centerY + 2, kMuted);
 }
@@ -290,22 +295,231 @@ void uppercaseCopy(const char* source, char* destination, size_t destinationSize
 const char* sectionDisplayName(const UsageSection& section) {
   if (strcmp(section.id, "claude") == 0) return "CLAUDE CODE";
   if (strcmp(section.id, "codex") == 0) return "CODEX";
+  if (strcmp(section.id, "gemini") == 0) return "GEMINI";
   return section.name;
+}
+
+const char* sectionFallbackName(const char* fallbackId) {
+  if (strcmp(fallbackId, "claude") == 0) return "Claude Code";
+  if (strcmp(fallbackId, "codex") == 0) return "Codex";
+  if (strcmp(fallbackId, "gemini") == 0) return "Gemini";
+  return "Meter";
 }
 
 const char* limitDisplayLabel(const UsageLimit& limit) {
   return strcmp(limit.label, "Weekly, all models") == 0 ? "Weekly" : limit.label;
 }
 
-size_t visibleLimitCount(const UsageSection* section) {
-  if (!section) return 0;
-  return std::min(kMaxVisibleLimits, static_cast<size_t>(section->limitCount));
+struct MeterLayout {
+  bool threeCard;
+  int firstY;
+  int cardGap;
+  int cardHeaderHeight;
+  int cardEmptyHeight;
+  int cardBottomPadding;
+  int cardRadius;
+  int cardTitleOffsetY;
+  int cardPlanOffsetY;
+  int cardAlertOffsetY;
+  int emptyTextOffsetY;
+  int rowStride;
+  int rowContentHeight;
+  int barOffsetY;
+  int barHeight;
+  int barRadius;
+  int subOffsetY;
+  int paceWidth;
+  int paceHeight;
+  int paceRadius;
+  int paceOffsetY;
+  int paceTextOffsetY;
+  int metricGap;
+  int clockRadius;
+  int clockOffsetY;
+  int countdownOffsetX;
+  int targetOffsetY;
+  const SmoothFont* titleFont;
+  const SmoothFont* labelFont;
+  const SmoothFont* percentFont;
+  const SmoothFont* paceFont;
+  const SmoothFont* subFont;
+  const SmoothFont* targetFont;
+};
+
+bool shouldShowGemini(const UsageSection* gemini) {
+  return gemini != nullptr && gemini->installed &&
+         (gemini->limitCount > 0 || gemini->authRequired || gemini->hasError || gemini->refreshError);
 }
 
-int sectionHeight(const UsageSection* section, int rowHeight) {
-  const size_t count = visibleLimitCount(section);
-  return count == 0 ? kCardEmptyHeight
-                    : kCardHeaderHeight + static_cast<int>(count) * rowHeight + kCardBottomPadding;
+size_t sectionLimitCap(const char* id, bool threeCard) {
+  if (!threeCard) return kMaxVisibleLimits;
+  if (id && strcmp(id, "claude") == 0) return 3;
+  return 2;
+}
+
+size_t visibleLimitCount(const UsageSection* section, bool threeCard = false) {
+  if (!section) return 0;
+  return std::min(sectionLimitCap(section->id, threeCard), static_cast<size_t>(section->limitCount));
+}
+
+MeterLayout twoCardLayout() {
+  return {
+      false,
+      kHeaderHeight,
+      kCardGap,
+      kCardHeaderHeight,
+      kCardEmptyHeight,
+      kCardBottomPadding,
+      15,
+      6,
+      8,
+      8,
+      49,
+      62,
+      62,
+      28,
+      12,
+      6,
+      42,
+      54,
+      22,
+      6,
+      0,
+      1,
+      9,
+      5,
+      8,
+      18,
+      1,
+      &kSmoothFont13,
+      &kSmoothFont18,
+      &kSmoothFont18,
+      &kSmoothFont15,
+      &kSmoothFont15,
+      &kSmoothFont13,
+  };
+}
+
+MeterLayout compactThreeCardLayout(size_t effectiveRows) {
+  if (effectiveRows <= 5) {
+    return {
+        true,
+        50,
+        7,
+        27,
+        56,
+        9,
+        14,
+        5,
+        7,
+        7,
+        31,
+        66,
+        56,
+        26,
+        11,
+        5,
+        41,
+        54,
+        20,
+        5,
+        1,
+        1,
+        9,
+        5,
+        9,
+        18,
+        1,
+        &kSmoothFont13,
+        &kSmoothFont18,
+        &kSmoothFont18,
+        &kSmoothFont15,
+        &kSmoothFont15,
+        &kSmoothFont13,
+    };
+  }
+  if (effectiveRows == 6) {
+    return {
+        true,
+        50,
+        6,
+        21,
+        52,
+        7,
+        13,
+        3,
+        5,
+        5,
+        28,
+        58,
+        51,
+        23,
+        10,
+        5,
+        36,
+        54,
+        20,
+        5,
+        1,
+        1,
+        9,
+        5,
+        9,
+        18,
+        1,
+        &kSmoothFont13,
+        &kSmoothFont18,
+        &kSmoothFont18,
+        &kSmoothFont15,
+        &kSmoothFont15,
+        &kSmoothFont13,
+    };
+  }
+  return {
+      true,
+      50,
+      5,
+      20,
+      46,
+      6,
+      12,
+      3,
+      3,
+      3,
+      24,
+      48,
+      42,
+      19,
+      8,
+      4,
+      28,
+      48,
+      18,
+      5,
+      0,
+      0,
+      7,
+      4,
+      8,
+      15,
+      0,
+      &kSmoothFont11,
+      &kSmoothFont15,
+      &kSmoothFont15,
+      &kSmoothFont13,
+      &kSmoothFont13,
+      &kSmoothFont13,
+  };
+}
+
+int sectionHeight(const UsageSection* section, int rowHeight, const MeterLayout& layout) {
+  const size_t count = visibleLimitCount(section, layout.threeCard);
+  if (count == 0) return layout.cardEmptyHeight;
+  if (layout.threeCard) {
+    return layout.cardHeaderHeight + static_cast<int>(count - 1) * layout.rowStride +
+           layout.rowContentHeight + layout.cardBottomPadding;
+  }
+  return layout.cardHeaderHeight + static_cast<int>(count) * rowHeight + layout.cardBottomPadding;
 }
 
 void drawSetupBody(UiState state, const char* apSsid, const char* apIp) {
@@ -358,29 +572,27 @@ void drawEmptyBody(UiState state) {
   }
 }
 
-void drawLimitMetrics(const UsageLimit& limit, int labelY, uint64_t nowEpochMs) {
+void drawLimitMetrics(const UsageLimit& limit, int labelY, const MeterLayout& layout, uint64_t nowEpochMs) {
   const uint16_t usageColor = toneColor(usageTone(limit.percent));
   char percent[8] = {};
   snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(limit.percent + 0.5f));
 
   const float pace = calculatePace(limit.percent, limit.hasReset ? limit.resetEpochMs : 0,
                                    limit.hasWindow ? limit.windowHours : 0.0f, nowEpochMs);
-  constexpr int kPaceWidth = 54;
-  constexpr int kPaceHeight = 22;
-  constexpr int kMetricGap = 9;
-  const int paceX = kContentRight - kPaceWidth;
-  drawFontRightText(pace >= 0.0f ? paceX - kMetricGap : kContentRight,
-                    labelY, percent, kSmoothFont18, usageColor, kCard);
+  const int paceX = kContentRight - layout.paceWidth;
+  drawFontRightText(pace >= 0.0f ? paceX - layout.metricGap : kContentRight,
+                    labelY, percent, *layout.percentFont, usageColor, kCard);
   if (pace >= 0.0f) {
     char paceText[12] = {};
     snprintf(paceText, sizeof(paceText), "%.1fx", pace);
-    canvas()->fillRoundRect(paceX, labelY, kPaceWidth, kPaceHeight, 6, kBadge);
-    drawFontCenteredText(paceX, kPaceWidth, labelY + 1, paceText, kSmoothFont15,
+    const int paceY = labelY + layout.paceOffsetY;
+    canvas()->fillRoundRect(paceX, paceY, layout.paceWidth, layout.paceHeight, layout.paceRadius, kBadge);
+    drawFontCenteredText(paceX, layout.paceWidth, paceY + layout.paceTextOffsetY, paceText, *layout.paceFont,
                          toneColor(paceTone(pace)), kBadge);
   }
 }
 
-void drawLimitReset(const UsageLimit& limit, int subY, uint64_t nowEpochMs) {
+void drawLimitReset(const UsageLimit& limit, int subY, const MeterLayout& layout, uint64_t nowEpochMs) {
   char countdown[32] = {};
   char resetLabel[24] = {};
   formatCountdown(limit.hasReset ? limit.resetEpochMs : 0, nowEpochMs, countdown, sizeof(countdown));
@@ -396,89 +608,107 @@ void drawLimitReset(const UsageLimit& limit, int subY, uint64_t nowEpochMs) {
   if (strncmp(countdownText, kResetPrefix, strlen(kResetPrefix)) == 0) {
     countdownText += strlen(kResetPrefix);
   }
-  drawClockIcon(kContentLeft + 6, subY + 8);
-  drawFontText(kContentLeft + 18, subY, countdownText, kSmoothFont15, rgb(184, 178, 200), kCard);
+  drawClockIcon(kContentLeft + layout.clockRadius + 1, subY + layout.clockOffsetY, layout.clockRadius);
+  drawFontText(kContentLeft + layout.countdownOffsetX, subY, countdownText, *layout.subFont,
+               rgb(184, 178, 200), kCard);
   if (resetLabel[0]) {
     char target[sizeof(resetLabel)] = {};
     uppercaseCopy(resetLabel, target, sizeof(target));
-    drawFontRightText(kContentRight, subY + 1, target, kSmoothFont13, kMuted, kCard);
+    drawFontRightText(kContentRight, subY + layout.targetOffsetY, target, *layout.targetFont, kMuted, kCard);
   }
 }
 
-void drawLimitBar(const UsageLimit& limit, int barY) {
+void drawLimitBar(const UsageLimit& limit, int barY, const MeterLayout& layout) {
   const uint16_t usageColor = toneColor(usageTone(limit.percent));
-  constexpr int kBarHeight = 12;
-  constexpr int kStripeSpan = kBarHeight - 1;
-  canvas()->fillRoundRect(kContentLeft, barY, kContentWidth, kBarHeight, 6, kTrack);
-  for (int stripe = kContentLeft + 6; stripe + kStripeSpan < kContentRight - 6; stripe += 14) {
-    canvas()->drawLine(stripe, barY + kStripeSpan, stripe + kStripeSpan, barY, rgb(55, 51, 67));
+  const int stripeSpan = layout.barHeight - 1;
+  canvas()->fillRoundRect(kContentLeft, barY, kContentWidth, layout.barHeight, layout.barRadius, kTrack);
+  for (int stripe = kContentLeft + 6; stripe + stripeSpan < kContentRight - 6; stripe += 14) {
+    canvas()->drawLine(stripe, barY + stripeSpan, stripe + stripeSpan, barY, rgb(55, 51, 67));
   }
   const int fillWidth = static_cast<int>(kContentWidth *
       std::max(0.0f, std::min(100.0f, limit.percent)) / 100.0f);
   if (fillWidth > 0) {
-    canvas()->fillRoundRect(kContentLeft, barY, std::max(6, fillWidth), kBarHeight, 6, usageColor);
+    canvas()->fillRoundRect(kContentLeft, barY, std::max(layout.barRadius * 2, fillWidth),
+                            layout.barHeight, layout.barRadius, usageColor);
   }
 }
 
-void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
+int rowSubOffsetY(int rowHeight, const MeterLayout& layout) {
+  if (layout.threeCard) return layout.subOffsetY;
+  return rowHeight >= 64 ? 47 : 42;
+}
+
+void drawLimitRow(const UsageLimit& limit, int y, int rowHeight, const MeterLayout& layout, uint64_t nowEpochMs) {
   const int labelY = y;
-  drawFontText(kContentLeft, labelY, limitDisplayLabel(limit), kSmoothFont18, kText, kCard);
-  drawLimitMetrics(limit, labelY, nowEpochMs);
+  drawFontText(kContentLeft, labelY, limitDisplayLabel(limit), *layout.labelFont, kText, kCard);
+  drawLimitMetrics(limit, labelY, layout, nowEpochMs);
 
-  const int barY = y + 28;
-  drawLimitBar(limit, barY);
+  const int barY = y + layout.barOffsetY;
+  drawLimitBar(limit, barY, layout);
 
-  const int subY = y + (rowHeight >= 64 ? 47 : 42);
-  drawLimitReset(limit, subY, nowEpochMs);
+  const int subY = y + rowSubOffsetY(rowHeight, layout);
+  drawLimitReset(limit, subY, layout, nowEpochMs);
 }
 
-void refreshLimitRow(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
-  constexpr int kLabelTopPadding = 1;
-  constexpr int kLabelHeight = 24;
-  const int labelY = y - kLabelTopPadding;
-  canvas()->fillRect(kContentLeft, labelY, kContentWidth, kLabelHeight, kCard);
-  drawFontText(kContentLeft, y, limitDisplayLabel(limit), kSmoothFont18, kText, kCard);
-  drawLimitMetrics(limit, y, nowEpochMs);
-  displayFlushRect(kContentLeft, labelY, kContentWidth, kLabelHeight);
+void refreshLimitRow(const UsageLimit& limit, int y, int rowHeight, const MeterLayout& layout, uint64_t nowEpochMs) {
+  const int labelClearHeight = std::min(
+      layout.barOffsetY,
+      std::max(static_cast<int>(layout.labelFont->lineHeight), layout.paceOffsetY + layout.paceHeight + 1));
+  canvas()->fillRect(kContentLeft, y, kContentWidth, labelClearHeight, kCard);
+  drawFontText(kContentLeft, y, limitDisplayLabel(limit), *layout.labelFont, kText, kCard);
+  drawLimitMetrics(limit, y, layout, nowEpochMs);
+  displayFlushRect(kContentLeft, y, kContentWidth, labelClearHeight);
 
-  constexpr int kBarHeight = 12;
-  const int barY = y + 28;
-  canvas()->fillRect(kContentLeft, barY, kContentWidth, kBarHeight, kCard);
-  drawLimitBar(limit, barY);
-  displayFlushRect(kContentLeft, barY, kContentWidth, kBarHeight);
+  const int barY = y + layout.barOffsetY;
+  canvas()->fillRect(kContentLeft, barY, kContentWidth, layout.barHeight, kCard);
+  drawLimitBar(limit, barY, layout);
+  displayFlushRect(kContentLeft, barY, kContentWidth, layout.barHeight);
 
-  constexpr int kSubTopPadding = 1;
-  constexpr int kSubHeight = 22;
-  const int subY = y + (rowHeight >= 64 ? 47 : 42);
-  canvas()->fillRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight, kCard);
-  drawLimitReset(limit, subY, nowEpochMs);
-  displayFlushRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight);
+  const int subY = y + rowSubOffsetY(rowHeight, layout);
+  const int subClearY = subY + 2;
+  const int subClearHeight = layout.subFont->lineHeight - 2;
+  canvas()->fillRect(kContentLeft, subClearY, kContentWidth, subClearHeight, kCard);
+  drawLimitReset(limit, subY, layout, nowEpochMs);
+  displayFlushRect(kContentLeft, subClearY, kContentWidth, subClearHeight);
 }
 
-void refreshLimitTime(const UsageLimit& limit, int y, int rowHeight, uint64_t nowEpochMs) {
-  constexpr int kMetricLeft = 340;
-  constexpr int kMetricTopPadding = 1;
-  constexpr int kMetricHeight = 24;
-  const int metricY = y - kMetricTopPadding;
-  canvas()->fillRect(kMetricLeft, metricY, kContentRight - kMetricLeft + 1, kMetricHeight, kCard);
-  drawLimitMetrics(limit, y, nowEpochMs);
-  displayFlushRect(kMetricLeft, metricY, kContentRight - kMetricLeft + 1, kMetricHeight);
+void refreshLimitTime(const UsageLimit& limit, int y, int rowHeight, const MeterLayout& layout, uint64_t nowEpochMs) {
+  constexpr int kMetricLeft = 336;
+  const int metricClearHeight = std::min(
+      layout.barOffsetY,
+      std::max(static_cast<int>(layout.percentFont->lineHeight), layout.paceOffsetY + layout.paceHeight + 1));
+  canvas()->fillRect(kMetricLeft, y, kContentRight - kMetricLeft + 1, metricClearHeight, kCard);
+  drawLimitMetrics(limit, y, layout, nowEpochMs);
+  displayFlushRect(kMetricLeft, y, kContentRight - kMetricLeft + 1, metricClearHeight);
 
-  constexpr int kSubTopPadding = 1;
-  constexpr int kSubHeight = 22;
-  const int subY = y + (rowHeight >= 64 ? 47 : 42);
-  canvas()->fillRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight, kCard);
-  drawLimitReset(limit, subY, nowEpochMs);
-  displayFlushRect(kContentLeft, subY - kSubTopPadding, kContentWidth, kSubHeight);
+  const int subY = y + rowSubOffsetY(rowHeight, layout);
+  const int subClearY = subY + 2;
+  const int subClearHeight = layout.subFont->lineHeight - 2;
+  canvas()->fillRect(kContentLeft, subClearY, kContentWidth, subClearHeight, kCard);
+  drawLimitReset(limit, subY, layout, nowEpochMs);
+  displayFlushRect(kContentLeft, subClearY, kContentWidth, subClearHeight);
 }
 
-void calculateRowHeights(const UsageSection* claude, const UsageSection* codex,
-                         int& claudeRowHeight, int& codexRowHeight) {
-  const size_t claudeRows = visibleLimitCount(claude);
-  const size_t codexRows = visibleLimitCount(codex);
+void calculateLayout(const UsageSection* claude, const UsageSection* codex, const UsageSection* gemini,
+                     MeterLayout& layout, int& claudeRowHeight, int& codexRowHeight, int& geminiRowHeight) {
+  if (shouldShowGemini(gemini)) {
+    const size_t effectiveRows = std::max<size_t>(1, visibleLimitCount(claude, true)) +
+                                 std::max<size_t>(1, visibleLimitCount(codex, true)) +
+                                 std::max<size_t>(1, visibleLimitCount(gemini, true));
+    layout = compactThreeCardLayout(effectiveRows);
+    claudeRowHeight = layout.rowStride;
+    codexRowHeight = layout.rowStride;
+    geminiRowHeight = layout.rowStride;
+    return;
+  }
+
+  layout = twoCardLayout();
+  const size_t claudeRows = visibleLimitCount(claude, false);
+  const size_t codexRows = visibleLimitCount(codex, false);
   const size_t totalRows = claudeRows + codexRows;
   claudeRowHeight = 62;
   codexRowHeight = 62;
+  geminiRowHeight = 0;
 
   if (claudeRows == 3 && codexRows == 1) {
     claudeRowHeight = 82;
@@ -492,54 +722,61 @@ void calculateRowHeights(const UsageSection* claude, const UsageSection* codex,
   }
 }
 
-void refreshSection(const UsageSection* section, int y, int rowHeight,
+void refreshSection(const UsageSection* section, int y, int rowHeight, const MeterLayout& layout,
                     uint64_t nowEpochMs, bool snapshotValuesChanged) {
   if (!section) return;
-  const size_t count = visibleLimitCount(section);
+  const size_t count = visibleLimitCount(section, layout.threeCard);
   for (size_t i = 0; i < count; ++i) {
-    const int rowY = y + kCardHeaderHeight + static_cast<int>(i) * rowHeight;
-    if (snapshotValuesChanged) refreshLimitRow(section->limits[i], rowY, rowHeight, nowEpochMs);
-    else refreshLimitTime(section->limits[i], rowY, rowHeight, nowEpochMs);
+    const int rowY = y + layout.cardHeaderHeight + static_cast<int>(i) * rowHeight;
+    if (snapshotValuesChanged) refreshLimitRow(section->limits[i], rowY, rowHeight, layout, nowEpochMs);
+    else refreshLimitTime(section->limits[i], rowY, rowHeight, layout, nowEpochMs);
   }
 }
 
-void drawSection(const UsageSection* source, const char* fallbackId, int y, int rowHeight, uint64_t nowEpochMs) {
+void drawSection(const UsageSection* source, const char* fallbackId, int y, int rowHeight,
+                 const MeterLayout& layout, uint64_t nowEpochMs) {
   UsageSection empty;
   clearSection(empty);
   if (!source) {
     empty.present = false;
     strncpy(empty.id, fallbackId, sizeof(empty.id) - 1);
-    strncpy(empty.name, strcmp(fallbackId, "claude") == 0 ? "Claude Code" : "Codex", sizeof(empty.name) - 1);
+    strncpy(empty.name, sectionFallbackName(fallbackId), sizeof(empty.name) - 1);
     source = &empty;
   }
 
-  const size_t count = visibleLimitCount(source);
-  const int height = sectionHeight(source, rowHeight);
-  canvas()->fillRoundRect(kOuterMargin, y, kCardWidth, height, 15, kCard);
-  canvas()->drawRoundRect(kOuterMargin, y, kCardWidth, height, 15, kLine);
-  drawFontText(kContentLeft, y + 6, sectionDisplayName(*source), kSmoothFont13, kMuted, kCard);
+  const size_t count = visibleLimitCount(source, layout.threeCard);
+  const int height = sectionHeight(source, rowHeight, layout);
+  canvas()->fillRoundRect(kOuterMargin, y, kCardWidth, height, layout.cardRadius, kCard);
+  canvas()->drawRoundRect(kOuterMargin, y, kCardWidth, height, layout.cardRadius, kLine);
+  drawFontText(kContentLeft, y + layout.cardTitleOffsetY, sectionDisplayName(*source),
+               *layout.titleFont, kMuted, kCard);
 
   char plan[sizeof(source->plan)] = {};
-  uppercaseCopy(source->plan, plan, sizeof(plan));
+  if (strcmp(source->id, "codex") != 0) uppercaseCopy(source->plan, plan, sizeof(plan));
   if (plan[0]) {
-    drawFontText(std::min(330, kContentLeft + smoothTextWidth(kSmoothFont13, sectionDisplayName(*source)) + 7),
-                 y + 8, plan, kSmoothFont11, kAccent, kCard);
+    drawFontText(std::min(330, kContentLeft + smoothTextWidth(*layout.titleFont, sectionDisplayName(*source)) + 7),
+                 y + layout.cardPlanOffsetY, plan, kSmoothFont11, kAccent, kCard);
   }
   if (source->authRequired) {
-    drawFontRightText(kContentRight, y + 8, "AUTH", kSmoothFont11, toneColor(UsageTone::Red), kCard);
+    drawFontRightText(kContentRight, y + layout.cardAlertOffsetY, "AUTH",
+                      kSmoothFont11, toneColor(UsageTone::Red), kCard);
   } else if (source->hasError || source->refreshError) {
-    drawFontRightText(kContentRight, y + 8, "ERROR", kSmoothFont11, toneColor(UsageTone::Red), kCard);
+    drawFontRightText(kContentRight, y + layout.cardAlertOffsetY, "ERROR",
+                      kSmoothFont11, toneColor(UsageTone::Red), kCard);
   }
 
   if (count == 0) {
-    drawFontText(kContentLeft, y + 49, source->authRequired ? "Authentication required" : "No current data",
+    drawFontText(kContentLeft, y + layout.emptyTextOffsetY,
+                 source->authRequired ? "Authentication required" : "No current data",
                  kSmoothFont13, source->authRequired ? toneColor(UsageTone::Red) : kMuted, kCard);
     return;
   }
-  for (size_t i = 0; i < count; ++i) drawLimitRow(source->limits[i], y + kCardHeaderHeight + static_cast<int>(i) * rowHeight,
-                                                    rowHeight, nowEpochMs);
+  for (size_t i = 0; i < count; ++i) {
+    drawLimitRow(source->limits[i], y + layout.cardHeaderHeight + static_cast<int>(i) * rowHeight,
+                 rowHeight, layout, nowEpochMs);
+  }
   if (source->limitCount > count) {
-    drawFontRightText(kContentRight, y + height - 17, "+ more", kSmoothFont11, kMuted, kCard);
+    drawFontRightText(kContentRight, y + height - 16, "+ more", kSmoothFont11, kMuted, kCard);
   }
 }
 
@@ -565,14 +802,21 @@ void refreshUiRegions(const UsageSnapshot* snapshot, UiState state, bool refresh
 
   const UsageSection* claude = findSection(*snapshot, "claude");
   const UsageSection* codex = findSection(*snapshot, "codex");
+  const UsageSection* gemini = findSection(*snapshot, "gemini");
+  MeterLayout layout;
   int claudeRowHeight = 0;
   int codexRowHeight = 0;
-  calculateRowHeights(claude, codex, claudeRowHeight, codexRowHeight);
+  int geminiRowHeight = 0;
+  calculateLayout(claude, codex, gemini, layout, claudeRowHeight, codexRowHeight, geminiRowHeight);
 
-  const int firstY = kHeaderHeight;
-  refreshSection(claude, firstY, claudeRowHeight, nowEpochMs, snapshotValuesChanged);
-  const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
-  refreshSection(codex, secondY, codexRowHeight, nowEpochMs, snapshotValuesChanged);
+  const int firstY = layout.firstY;
+  refreshSection(claude, firstY, claudeRowHeight, layout, nowEpochMs, snapshotValuesChanged);
+  const int secondY = firstY + sectionHeight(claude, claudeRowHeight, layout) + layout.cardGap;
+  refreshSection(codex, secondY, codexRowHeight, layout, nowEpochMs, snapshotValuesChanged);
+  if (layout.threeCard) {
+    const int thirdY = secondY + sectionHeight(codex, codexRowHeight, layout) + layout.cardGap;
+    refreshSection(gemini, thirdY, geminiRowHeight, layout, nowEpochMs, snapshotValuesChanged);
+  }
 }
 
 }  // namespace
@@ -594,14 +838,21 @@ void uiDraw(const UsageSnapshot* snapshot, UiState state, bool refreshing,
   } else {
     const UsageSection* claude = findSection(*snapshot, "claude");
     const UsageSection* codex = findSection(*snapshot, "codex");
-    const int firstY = kHeaderHeight;
+    const UsageSection* gemini = findSection(*snapshot, "gemini");
+    MeterLayout layout;
     int claudeRowHeight = 0;
     int codexRowHeight = 0;
-    calculateRowHeights(claude, codex, claudeRowHeight, codexRowHeight);
+    int geminiRowHeight = 0;
+    calculateLayout(claude, codex, gemini, layout, claudeRowHeight, codexRowHeight, geminiRowHeight);
 
-    drawSection(claude, "claude", firstY, claudeRowHeight, nowEpochMs);
-    const int secondY = firstY + sectionHeight(claude, claudeRowHeight) + kCardGap;
-    drawSection(codex, "codex", secondY, codexRowHeight, nowEpochMs);
+    const int firstY = layout.firstY;
+    drawSection(claude, "claude", firstY, claudeRowHeight, layout, nowEpochMs);
+    const int secondY = firstY + sectionHeight(claude, claudeRowHeight, layout) + layout.cardGap;
+    drawSection(codex, "codex", secondY, codexRowHeight, layout, nowEpochMs);
+    if (layout.threeCard) {
+      const int thirdY = secondY + sectionHeight(codex, codexRowHeight, layout) + layout.cardGap;
+      drawSection(gemini, "gemini", thirdY, geminiRowHeight, layout, nowEpochMs);
+    }
   }
 
   uiDrawPageDots(0, kBackground);
