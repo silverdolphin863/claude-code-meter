@@ -56,7 +56,7 @@ lighting interface is replaced completely by the expanded CC Meter dashboard.
   <img src="docs/lcd-hardware.png" width="900" alt="Physical ESP32-4848S040 display running CC Meter over USB">
 </p>
 
-<p align="center"><sub>The physical 480x480 panel running Claude Code and Codex meters over USB.</sub></p>
+<p align="center"><sub>The physical 480x480 panel running Claude Code, Codex, and Gemini meters over USB.</sub></p>
 
 <p align="center">
   <a href="docs/lcd-preview.png"><img src="docs/lcd-preview.png" width="480" alt="Exact 480x480 CC Meter LCD interface"></a>
