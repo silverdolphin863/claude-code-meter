@@ -53,7 +53,7 @@ display with a dedicated firmware image. The factory weather, clock, and
 lighting interface is replaced completely by the expanded CC Meter dashboard.
 
 <p align="center">
-  <img src="docs/lcd-hardware.png" width="900" alt="Physical ESP32-4848S040 display running CC Meter over USB">
+  <img src="docs/lcd-hardware.png" width="520" alt="Physical ESP32-4848S040 display running CC Meter over USB">
 </p>
 
 <p align="center"><sub>The physical 480x480 panel running Claude Code, Codex, and Gemini meters over USB.</sub></p>
